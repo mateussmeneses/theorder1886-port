@@ -9,15 +9,39 @@
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/passes/resource_pass.h"
+#include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/runtime_info.h"
+#include "shader_recompiler/specialization.h"
+#include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
 int main() {
 #ifdef _WIN32
     _set_error_mode(_OUT_TO_STDERR);
 #endif
     using namespace Shader;
+
+    // Indirect draws preserve the PM4 SGPR offsets and select indirect vertex-ID semantics.
+    {
+        const auto params = Vulkan::DrawIndirectParams::Indirect(7, 11);
+        assert(params.vertex_sgpr_offset == 7);
+        assert(params.instance_sgpr_offset == 11);
+        assert(params.is_indirect);
+
+        Info info{};
+        info.hw_stage = HwStage::Vertex;
+        info.sw_stage = SwStage::Vertex;
+        RuntimeInfo direct{};
+        direct.Initialize(HwStage::Vertex, SwStage::Vertex);
+        RuntimeInfo indirect = direct;
+        indirect.sw.vs.is_indirect = params.is_indirect;
+        Profile profile{};
+        const Backend::Bindings bindings{};
+        const StageSpecialization direct_spec{info, direct, profile, bindings};
+        const StageSpecialization indirect_spec{info, indirect, profile, bindings};
+        assert(!(direct_spec == indirect_spec));
+    }
 
     // 1. SamplerResource::GetSharp integer-image filter clamping (VUID-04553).
     {
@@ -150,9 +174,34 @@ int main() {
         assert(program.ins_list.size() == 1);
     }
 
-    // 5. PartialHeightViews toggle default.
+    // 5. Indirect vertex shaders undo Vulkan's base offsets when fetch shaders don't supply them.
+    {
+        Info info{};
+        info.hw_stage = HwStage::Vertex;
+        info.sw_stage = SwStage::Vertex;
+        Profile profile{};
+        const auto count_subtractions = [&](RuntimeInfo runtime) {
+            Common::ObjectPool<IR::Inst> pool;
+            IR::Block block(pool);
+            Gcn::Translator translator(info, runtime, profile);
+            translator.EmitPrologue(&block);
+            u32 count = 0;
+            for (const auto& instruction : block.Instructions()) {
+                count += instruction.GetOpcode() == IR::Opcode::ISub32;
+            }
+            return count;
+        };
+        RuntimeInfo direct{};
+        direct.Initialize(HwStage::Vertex, SwStage::Vertex);
+        RuntimeInfo indirect = direct;
+        indirect.sw.vs.is_indirect = true;
+        assert(count_subtractions(direct) == 0);
+        assert(count_subtractions(indirect) == 2);
+    }
+
+    // 6. PartialHeightViews toggle default.
     assert(!PortToggle::Disabled(PortToggle::PartialHeightViews));
 
-    std::puts("shader resource / sampler clamping / mip binding / empty program guard OK");
+    std::puts("shader resource / indirect IDs / sampler clamping / mip binding / empty program guard OK");
     return EXIT_SUCCESS;
 }

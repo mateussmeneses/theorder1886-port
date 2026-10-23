@@ -471,6 +471,10 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                     if (vs && sel.fetch_shader) {
                         PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
                     }
+                    static const bool log_waits = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+                    if (log_waits) {
+                        draw.ready_at = std::chrono::steady_clock::now();
+                    }
                     draw.state.store(PreparedDraw::Ready, std::memory_order_release);
                 } else {
                     draw.state.store(PreparedDraw::Unavailable, std::memory_order_release);

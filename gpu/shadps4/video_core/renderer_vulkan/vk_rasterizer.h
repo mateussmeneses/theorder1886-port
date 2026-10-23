@@ -260,7 +260,9 @@ private:
     /// port (FEAT-004 Class C): stall exactly one visible pending graphics draw on its compiling
     /// pipeline, else log the never-silent skip/stall. Returns the pipeline to use, or nullptr to
     /// skip the draw as before. Must be called right after a null GetGraphicsPipeline().
-    const GraphicsPipeline* ResolvePendingGraphics(const GraphicsPipeline* pipeline);
+    const GraphicsPipeline* ResolvePendingGraphics(const GraphicsPipeline* pipeline,
+                                                   const PreparedDraw* prepared = nullptr,
+                                                   const char* source = "visible_direct");
 
     void BindBuffers(const Shader::Info& stage, const PreparedStage* prepared,
                      Shader::Backend::Bindings& binding,

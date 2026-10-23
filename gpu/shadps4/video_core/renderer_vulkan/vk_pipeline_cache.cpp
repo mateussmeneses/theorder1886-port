@@ -17,6 +17,7 @@
 #include "common/io_file.h"
 #include "common/elf_info.h"
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include "common/path_util.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -73,6 +74,8 @@ struct AsyncShaderCompilation {
 
 struct AsyncGraphicsCompilation {
     AsyncJob<std::shared_ptr<AsyncGraphicsCompilation>> job;
+    std::chrono::steady_clock::time_point queued_at{};
+    u64 queue_wait_ns{}, pipeline_create_ns{};
     PipelineSelection selection;
     std::array<std::unique_ptr<Shader::Info>, MaxShaderStages> infos;
     std::array<std::vector<u32>, MaxShaderStages> user_data;
@@ -979,7 +982,9 @@ void PipelineCache::PublishGraphics(bool wait) {
     }
 }
 
-const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& key) {
+const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& key,
+                                                     const PreparedDraw* prepared,
+                                                     const char* source) {
     // port (FEAT-004 Class C): a visible draw whose pipeline is still compiling would otherwise be
     // dropped (object pops in/out). Stall this one draw on exactly that one build instead of
     // skipping it. We wait on a single key's in-flight job and retire it with the same steps the
@@ -989,10 +994,47 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
         return nullptr;
     }
     auto build = it.value();
+    const auto wait_start = std::chrono::steady_clock::now();
     {
         PhaseTimer waiting{g_port_compile_wait_ns};
         build->job.Wait();
     }
+    const double wait_ms = std::chrono::duration<double, std::milli>(
+                               std::chrono::steady_clock::now() - wait_start)
+                               .count();
+    static const bool log_waits = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+    const auto state = prepared ? prepared->state.load(std::memory_order_acquire)
+                                : PreparedDraw::Unavailable;
+    const auto ready_at = prepared && state == PreparedDraw::Ready && prepared->key == key
+                              ? prepared->ready_at
+                              : std::chrono::steady_clock::time_point{};
+    const char* prep_status = !prepared ? "no_draw"
+                              : state == PreparedDraw::Pending ? "not_ready"
+                              : state != PreparedDraw::Ready  ? "unavailable"
+                              : prepared->key != key           ? "key_mismatch"
+                              : ready_at == std::chrono::steady_clock::time_point{}
+                                  ? "no_timestamp"
+                                  : "matched";
+    const double prep_ms = ready_at == std::chrono::steady_clock::time_point{}
+                               ? -1.0
+                               : std::chrono::duration<double, std::milli>(
+                                     wait_start - ready_at)
+                                     .count();
+    const auto log_wait = [&](const char* outcome) {
+        if (log_waits && wait_ms >= 0.1) {
+            LOG_WARNING(Render_Vulkan,
+                     "Graphics pipeline wait: flip {} key 0x{:016x} stage0 0x{:016x} "
+                     "stage4 0x{:016x} spv0 0x{:016x} spv4 0x{:016x} "
+                     "wait {:.3f} ms prep {:.3f} ms prep_status {} source {} queue {:.3f} ms create {:.3f} ms all_stages [{}] "
+                     "all_spvs [{}] outcome {}",
+                     PortStats::flips.load(std::memory_order_relaxed),
+                     std::hash<GraphicsPipelineKey>{}(key), key.stage_hashes[0], key.stage_hashes[4],
+                     sel.spv_hashes[0], sel.spv_hashes[4], wait_ms, prep_ms, prep_status, source,
+                     build->queue_wait_ns / 1e6,
+                     build->pipeline_create_ns / 1e6, fmt::join(key.stage_hashes, ","),
+                     fmt::join(sel.spv_hashes, ","), outcome);
+        }
+    };
     if (last_lookup_pending && last_pending_key == key) {
         last_lookup_pending = false;
     }
@@ -1009,6 +1051,7 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
             LOG_ERROR(Render_Vulkan, "port: pipeline {:#x} compilation failed: {}",
                       std::hash<GraphicsPipelineKey>{}(key), build->job.Error());
         }
+        log_wait(build->job.Failed() ? "failed" : "published");
         pending_graphics.erase(it);
         return pipeline;
     }
@@ -1018,6 +1061,7 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
     // emplace can discard the pipeline owned by this completed on-demand build.
     const auto published = graphics_pipelines.emplace(key, std::move(build->pipeline)).first;
     ++num_new_pipelines;
+    log_wait("ready");
     pending_graphics.erase(it);
     return published->second && !published->second->Failed() ? published->second.get() : nullptr;
 }
@@ -1192,7 +1236,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     }
     if (sync_compile && pending_graphics.contains(sel.graphics_key)) {
         // Refresh first: the previous selection may belong to a different draw.
-        return WaitGraphics(sel.graphics_key);
+        return WaitGraphics(sel.graphics_key, prepared, "small_target_sync");
     }
     // port: a pipeline an earlier session built (its key is stored) comes back from the
     // pipeline binary cache in 1-2 ms: built here, its draws are not skipped meanwhile. Skipped
@@ -1230,16 +1274,32 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             // few ms: ahead of the driver compiles (~250 ms each), its draws are skipped for a
             // frame or two instead of seconds (objects blinking at scene starts).
             const bool urgent = restore_expected && !sel.fresh_permutation && stored();
+            build->queued_at = std::chrono::steady_clock::now();
             const bool queued = build->job.Start(*compiler, [this, build] {
+                const auto worker_started = std::chrono::steady_clock::now();
+                build->queue_wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           worker_started - build->queued_at).count();
                 // Only the vertex stage uses fetch-shader guest pointers during pipeline construction.
                 Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch[u32(SwStage::Vertex)]};
                 PhaseTimer compile{g_port_async_ns};
                 auto& s = build->selection;
-                build->pipeline = std::make_unique<GraphicsPipeline>(
-                    instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
-                    s.infos, s.runtime_infos, s.fetch_shader ? &*s.fetch_shader : nullptr, s.modules,
-                    build->data, false);
+                const auto create_started = std::chrono::steady_clock::now();
+                const auto record_create_time = [&] {
+                    build->pipeline_create_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                    std::chrono::steady_clock::now() - create_started)
+                                                    .count();
+                };
+                try {
+                    build->pipeline = std::make_unique<GraphicsPipeline>(
+                        instance, scheduler, desc_heap, profile, s.graphics_key,
+                        *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+                        s.infos, s.runtime_infos, s.fetch_shader ? &*s.fetch_shader : nullptr,
+                        s.modules, build->data, false);
+                } catch (...) {
+                    record_create_time();
+                    throw;
+                }
+                record_create_time();
                 return build;
             }, urgent);
             if (queued) {
@@ -1732,7 +1792,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         const auto params = AmdGpu::GetParams(*pgm);
         std::optional<Shader::Gcn::FetchShaderData> fetch_shader_;
         std::tie(sel.infos[stage_out_idx], sel.modules[stage_out_idx], fetch_shader_,
-                 key.stage_hashes[stage_out_idx]) =
+                 key.stage_hashes[stage_out_idx], sel.spv_hashes[stage_out_idx]) =
             GetProgram(sel, stage_in, stage_out, params, binding);
         if (!sel.infos[stage_out_idx]) {
             sel.compilation_pending = true;
@@ -1746,6 +1806,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
+    sel.spv_hashes.fill(0);
     sel.fresh_permutation = false;
 
     bind_stage(HwStage::Fragment, SwStage::Fragment);
@@ -1847,7 +1908,8 @@ bool PipelineCache::RefreshComputeKey() {
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto cs_params = AmdGpu::GetParams(cs_pgm);
     sel.fresh_permutation = false;
-    std::tie(sel.infos[0], sel.modules[0], sel.fetch_shader, compute_key.value) =
+    std::tie(sel.infos[0], sel.modules[0], sel.fetch_shader, compute_key.value,
+             sel.spv_hashes[0]) =
         GetProgram(sel, HwStage::Compute, SwStage::Compute, cs_params, binding);
     return sel.infos[0] != nullptr;
 }
@@ -1939,7 +2001,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             {program, params.hash, hw_stage, info.pgm_base, &info.flattened_ud_buf});
         sel.fresh_permutation |= it->fresh;
         return std::make_tuple(&info, it->module, ToFetchShader(it->spec.fetch_shader_data),
-                               HashCombine(params.hash, perm_idx));
+                               HashCombine(params.hash, perm_idx), it->spv_hash);
     }
 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
@@ -1950,9 +2012,23 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                                !sel.regs->stage_enable.hs_en &&
                                !EmulatorSettings.IsShaderCollect();
     if (!compile_async && it_pgm != program_cache.end() && it_pgm->second->pending) {
+        const size_t permutation = it_pgm->second->pending->permutation;
+        const auto wait_start = std::chrono::steady_clock::now();
         {
             PhaseTimer waiting{g_port_compile_wait_ns};
             it_pgm->second->pending->job.Wait();
+        }
+        const double wait_ms = std::chrono::duration<double, std::milli>(
+                                   std::chrono::steady_clock::now() - wait_start)
+                                   .count();
+        static const bool log_shader_waits =
+            std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+        if (log_shader_waits && wait_ms >= 0.1) {
+            LOG_WARNING(Render_Vulkan,
+                     "Shader compilation wait: flip {} shader 0x{:016x} stage {} permutation {} "
+                     "wait {:.3f} ms",
+                     PortStats::flips.load(std::memory_order_relaxed), params.hash,
+                     static_cast<u32>(hw_stage), permutation, wait_ms);
         }
         PublishShaders();
     }
@@ -1989,7 +2065,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         sel.fresh_permutation = true;
         return std::make_tuple(&program->info, module,
                                ToFetchShader(program->modules[0].spec.fetch_shader_data),
-                               perm_hash);
+                               perm_hash, spv_hash);
     }
 
     auto& program = it_pgm.value();
@@ -2108,7 +2184,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     }
     return std::make_tuple(&program->info, module,
                            ToFetchShader(program->modules[perm_idx].spec.fetch_shader_data),
-                           perm_hash);
+                           perm_hash, program->modules[perm_idx].spv_hash);
 }
 
 std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule module,

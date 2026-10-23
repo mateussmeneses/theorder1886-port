@@ -5,6 +5,7 @@
 
 #include <deque>
 #include <functional>
+#include <chrono>
 
 #include "common/debug.h"
 #include "common/polyfill_thread.h"
@@ -102,6 +103,9 @@ private:
         s64 flip_arg;
         s32 index;
         bool eop;
+        std::chrono::steady_clock::time_point submitted_at;
+        std::chrono::steady_clock::time_point queued_at;
+        u64 renderer_flip;
 
         operator bool() const noexcept {
             return frame != nullptr;
@@ -111,7 +115,8 @@ private:
     void Flip(const Request& req);
     void DrawBlankFrame(); // Video port out not open
     void DrawLastFrame();  // Used when there is no flip request
-    void SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop = false);
+    void SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop,
+                            std::chrono::steady_clock::time_point submitted_at);
     void PresentThread(std::stop_token token);
     /// port: runs presenter work (acquire, blit, vkQueuePresent) off the vblank thread, in
     /// order. Acquire and present block while the GPU is the bottleneck (much longer on NVIDIA);

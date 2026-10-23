@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <mutex>
 #include <unordered_set>
 #include <xxhash.h>
@@ -989,7 +990,9 @@ bool Rasterizer::TargetsVisibleSceneAttachment(u32 mrt_mask) const {
     return false;
 }
 
-const GraphicsPipeline* Rasterizer::ResolvePendingGraphics(const GraphicsPipeline* pipeline) {
+const GraphicsPipeline* Rasterizer::ResolvePendingGraphics(const GraphicsPipeline* pipeline,
+                                                            const PreparedDraw* prepared,
+                                                            const char* source) {
     // Pipeline was selected: nothing pending to resolve.
     if (pipeline) {
         return pipeline;
@@ -1004,7 +1007,7 @@ const GraphicsPipeline* Rasterizer::ResolvePendingGraphics(const GraphicsPipelin
         const u64 frame = FrameCapture::CurrentFrameIndex();
         if (TargetsVisibleSceneAttachment(key.mrt_mask)) {
             // Stall this one visible draw on exactly this one compile instead of dropping it.
-            if (const auto* ready = pipeline_cache.WaitGraphics(key)) {
+            if (const auto* ready = pipeline_cache.WaitGraphics(key, prepared, source)) {
                 // Never silent: a stalled draw is logged, then proceeds (DrawRecord mints its own
                 // stable draw_seq for the capture stream).
                 FrameCapture::LogSkipStall(frame, FrameCapture::NextDrawSeq(), 0, vs_hash, ps_hash,
@@ -1054,7 +1057,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const PreparedDraw* pre
     // port (FEAT-004 Class C): stall a visible pending draw on its one compiling pipeline (never
     // silently drop it); a prepared stall invalidates the prepared sharps, so take the regular path.
     if (!pipeline) {
-        pipeline = ResolvePendingGraphics(pipeline);
+        pipeline = ResolvePendingGraphics(pipeline, prepared);
         used_prepared = nullptr;
     }
     if (!pipeline) {
@@ -1400,14 +1403,12 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         }
     }
 
-    const DrawIndirectParams params = {
-        .vertex_sgpr_offset = vertex_sgpr_offset,
-        .instance_sgpr_offset = instance_sgpr_offset,
-    };
+    const DrawIndirectParams params =
+        DrawIndirectParams::Indirect(vertex_sgpr_offset, instance_sgpr_offset);
     const GraphicsPipeline* pipeline = pipeline_cache.GetGraphicsPipeline(params);
     // port (FEAT-004 Class C): stall a visible pending indirect draw, else log the skip.
     if (!pipeline) {
-        pipeline = ResolvePendingGraphics(pipeline);
+        pipeline = ResolvePendingGraphics(pipeline, nullptr, "visible_indirect");
     }
     if (!pipeline) {
         return;

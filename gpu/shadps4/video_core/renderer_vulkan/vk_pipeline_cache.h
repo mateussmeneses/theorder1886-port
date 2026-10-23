@@ -126,6 +126,13 @@ struct DrawIndirectParams {
     u16 vertex_sgpr_offset;
     u32 instance_sgpr_offset;
     bool is_indirect;
+
+    static constexpr DrawIndirectParams Indirect(u16 vertex_sgpr_offset,
+                                                 u32 instance_sgpr_offset) {
+        return {.vertex_sgpr_offset = vertex_sgpr_offset,
+                .instance_sgpr_offset = instance_sgpr_offset,
+                .is_indirect = true};
+    }
 };
 
 } // namespace Vulkan
@@ -143,6 +150,7 @@ struct PipelineSelection {
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<u64, MaxShaderStages> spv_hashes{};
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     bool motion = false;
@@ -205,7 +213,9 @@ public:
     /// port (FEAT-004 Class C): wait on and retire exactly ONE in-flight graphics build, the one
     /// keyed by `key`. Returns the finished pipeline, or nullptr if `key` is not pending or its
     /// build failed. Reuses the PublishGraphics retire steps; never waits on more than one key.
-    const GraphicsPipeline* WaitGraphics(const GraphicsPipelineKey& key);
+    const GraphicsPipeline* WaitGraphics(const GraphicsPipelineKey& key,
+                                         const PreparedDraw* prepared = nullptr,
+                                         const char* source = "unknown");
 
     /// port (FEAT-004 Class C): whether the just-returned null from GetGraphicsPipeline came from
     /// a still-compiling (pending) key rather than a failed/absent one. Mirrors UsedPrepared().
@@ -233,7 +243,7 @@ public:
     const ComputePipeline* GetComputePipeline();
 
     using Result = std::tuple<const Shader::Info*, vk::ShaderModule,
-                              std::optional<Shader::Gcn::FetchShaderData>, u64>;
+                              std::optional<Shader::Gcn::FetchShaderData>, u64, u64>;
     Result GetProgram(PipelineSelection& sel, Shader::HwStage stage, Shader::SwStage l_stage,
                       const Shader::ShaderParams& params, Shader::Backend::Bindings& binding);
 

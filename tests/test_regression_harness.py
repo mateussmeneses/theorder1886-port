@@ -25,6 +25,72 @@ batch_runs = load_tool('batch_runs')
 
 
 class RegressionReportTest(unittest.TestCase):
+    def test_graphics_pipeline_wait_events_keep_flip_key_and_latency(self):
+        result = regression_report.parse_log(
+            "Graphics pipeline wait: flip 123 key 0xabc stage0 0xdef stage4 0x123 "
+            "spv0 0x456 spv4 0x789 wait 87.500 ms prep 123.000 ms prep_status matched "
+            "source visible_direct queue 4.250 ms create 82.000 ms "
+            "all_stages [1,2,0,3,0,0] all_spvs [11,22,0,33,0,0] outcome ready\n", 10)
+        self.assertEqual(result['graphics_pipeline_waits'], [{
+            'flip': 123, 'key': '0000000000000abc', 'stage0': '0000000000000def',
+            'stage4': '0000000000000123', 'spv0': '0000000000000456',
+            'spv4': '0000000000000789', 'wait_ms': 87.5, 'prep_ms': 123.0,
+            'prep_status': 'matched', 'source': 'visible_direct', 'queue_ms': 4.25,
+            'create_ms': 82.0, 'stage_hashes': ['0000000000000001', '0000000000000002',
+                '0000000000000000', '0000000000000003', '0000000000000000', '0000000000000000'],
+            'spv_hashes': ['000000000000000b', '0000000000000016', '0000000000000000',
+                '0000000000000021', '0000000000000000', '0000000000000000'],
+            'outcome': 'ready'}])
+        self.assertEqual(regression_report.parse_log('', 10)['graphics_pipeline_waits'], [])
+
+    def test_graphics_pipeline_wait_event_supports_older_log_format(self):
+        result = regression_report.parse_log(
+            "Graphics pipeline wait: flip 123 key 0xabc stage0 0xdef stage4 0x123 "
+            "spv0 0x456 spv4 0x789 wait 87.500 ms outcome ready\n", 10)
+        self.assertEqual(result['graphics_pipeline_waits'][0]['queue_ms'], None)
+        self.assertEqual(result['graphics_pipeline_waits'][0]['create_ms'], None)
+        self.assertEqual(result['graphics_pipeline_waits'][0]['prep_ms'], None)
+        self.assertEqual(result['graphics_pipeline_waits'][0]['prep_status'], None)
+        self.assertEqual(result['graphics_pipeline_waits'][0]['source'], None)
+
+    def test_graphics_pipeline_wait_event_marks_missing_preparation_time(self):
+        result = regression_report.parse_log(
+            "Graphics pipeline wait: flip 123 key 0xabc stage0 0xdef stage4 0x123 "
+            "spv0 0x456 spv4 0x789 wait 87.500 ms prep -1.000 ms prep_status key_mismatch "
+            "source visible_indirect outcome ready\n", 10)
+        self.assertIsNone(result['graphics_pipeline_waits'][0]['prep_ms'])
+        self.assertEqual(result['graphics_pipeline_waits'][0]['prep_status'], 'key_mismatch')
+        self.assertEqual(result['graphics_pipeline_waits'][0]['source'], 'visible_indirect')
+
+    def test_shader_compilation_wait_events_keep_flip_program_and_stage(self):
+        result = regression_report.parse_log(
+            "Shader compilation wait: flip 456 shader 0xabc stage 4 permutation 7 "
+            "wait 64.250 ms\n", 10)
+        self.assertEqual(result['shader_compilation_waits'], [{
+            'flip': 456, 'shader': '0000000000000abc', 'stage': 4,
+            'permutation': 7, 'wait_ms': 64.25}])
+        self.assertEqual(regression_report.parse_log('', 10)['shader_compilation_waits'], [])
+
+    def test_wait_profile_keeps_callsite_and_wait_time(self):
+        result = regression_report.parse_log(
+            "Wait profile: buffer_cache.cpp:516; 12 calls, CPU submit 2.500 ms, "
+            "semaphore wait 450.000 ms, max wait 80.000 ms\n", 10)
+        self.assertEqual(result['wait_profiles'], [{
+            'site': 'buffer_cache.cpp', 'line': 516, 'calls': 12,
+            'submit_ms': 2.5, 'wait_ms': 450.0, 'max_wait_ms': 80.0}])
+        report = regression_report.render_markdown({'runs': [{
+            'measurements': {'wait_profiles': result['wait_profiles']}}]})
+        self.assertIn('calls may overlap', report)
+        self.assertIn('buffer_cache.cpp:516 12 calls, 450.0 ms, max 80.0 ms', report)
+
+    def test_markdown_report_summarizes_visible_pipeline_waits(self):
+        report = regression_report.render_markdown({'runs': [{
+            'condition': 'o3', 'iteration': 1,
+            'measurements': {'graphics_pipeline_waits': [
+                {'wait_ms': 75.0}, {'wait_ms': 10.0}]}}]})
+        self.assertIn('Visible graphics pipeline waits: 2 events, 85.0 ms total', report)
+        self.assertIn('1 over 50 ms; per-event keys and SPIR-V hashes are in the manifest.', report)
+
     def test_compute_reuse_preserves_content_identity_and_permutation_indices(self):
         result = regression_report.parse_log(
             "Compute pipeline reuse: shader 00000000804aeead permutation 361 -> 7 "
@@ -63,6 +129,32 @@ class RegressionReportTest(unittest.TestCase):
                 regression_report.parse_frame_trace(io.StringIO("frame,frame_ms\n" + rows))
         self.assertIsNone(regression_report.parse_frame_trace(
             io.StringIO("frame,frame_ms\n"))['frame_p99_ms'])
+
+    def test_frame_trace_summarizes_videoout_timing_when_available(self):
+        trace = regression_report.parse_frame_trace(io.StringIO(
+            "frame,frame_ms,guest_submit_gap_ns,submit_to_queue_ns,videoout_queue_wait_ns\n"
+            "2,16,1000000,2000000,3000000\n"
+            "3,25,5000000,6000000,7000000\n"))
+        self.assertEqual(trace['guest_submit_gap_max_ms'], 5)
+        self.assertEqual(trace['submit_to_queue_max_ms'], 6)
+        self.assertEqual(trace['videoout_queue_wait_max_ms'], 7)
+        self.assertAlmostEqual(trace['guest_submit_gap_p95_ms'], 4.8)
+
+    def test_frame_trace_attributes_longest_gpu_tick_wait_by_site_and_tick(self):
+        trace = regression_report.parse_frame_trace(io.StringIO(
+            "frame,frame_ms,gpu_tick_wait_file,gpu_tick_wait_line,gpu_tick_wait_target_tick,gpu_tick_wait_max_ns\n"
+            "2,100,vk_presenter.cpp,601,18,40000000\n"
+            "3,80,vk_scheduler.cpp,443,21,60000000\n"
+            "4,33,,,0,0\n"
+            "5,100,vk_presenter.cpp,601,23,85000000\n"))
+        self.assertEqual(trace['gpu_tick_wait_site_samples'], [
+            {'file': 'vk_presenter.cpp', 'line': 601, 'intervals': 2,
+             'sampled_wait_ns': 125000000, 'max_wait_ns': 85000000,
+             'max_frame': 5, 'max_target_tick': 23},
+            {'file': 'vk_scheduler.cpp', 'line': 443, 'intervals': 1,
+             'sampled_wait_ns': 60000000, 'max_wait_ns': 60000000,
+             'max_frame': 3, 'max_target_tick': 21},
+        ])
 
     def test_process_samples_keep_adapter_totals_separate(self):
         log = (

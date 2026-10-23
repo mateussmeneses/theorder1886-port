@@ -449,7 +449,7 @@ void Scheduler::Wait(u64 tick, std::source_location caller, u64 submit_ns) {
         const auto completed = std::chrono::steady_clock::now();
         WaitDiagnostics::Get().Add(caller.file_name(), caller.line(),
             submit_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(submitted - start).count(),
-            std::chrono::duration_cast<std::chrono::nanoseconds>(completed - submitted).count());
+            std::chrono::duration_cast<std::chrono::nanoseconds>(completed - submitted).count(), tick);
     }
 }
 

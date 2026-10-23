@@ -3,9 +3,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <vector>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <time.h>
@@ -63,22 +63,32 @@ public:
             return;
         }
         std::setvbuf(file, buffer.data(), _IOFBF, buffer.size());
-        std::fprintf(file, "frame,frame_ms,compile_wait_ns,readback_wait_ns,gpu_tick_wait_ns,recorder_wait_ns,"
+        std::fprintf(file, "frame,frame_ms,renderer_flip,guest_submit_gap_ns,submit_to_queue_ns,videoout_queue_wait_ns,"
+                           "compile_wait_ns,readback_wait_ns,gpu_tick_wait_ns,recorder_wait_ns,"
                            "host_copy_wait_ns,translate_ns,spirv_ns,driver_ns,"
-                           "image_upload_bytes,buffer_upload_bytes\n");
+                           "image_upload_bytes,buffer_upload_bytes,gpu_tick_wait_file,gpu_tick_wait_line,"
+                           "gpu_tick_wait_target_tick,gpu_tick_wait_max_ns\n");
     }
     ~FrameTrace() {
         if (file && std::fclose(file) != 0) {
             std::perror("Frame trace: close failed");
         }
     }
-    void Write(u64 frame, double ms, u64 compile_wait, const u64* current, const u64* previous,
-               u64 images, u64 buffers) {
+    void Write(u64 frame, double ms, u64 renderer_flip, u64 submit_gap, u64 submit_to_queue,
+               u64 queue_wait,
+               u64 compile_wait, const u64* current, const u64* previous, u64 images, u64 buffers) {
         if (!file) {
             return;
         }
-        if (std::fprintf(file, "%llu,%.6f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
-                         (unsigned long long)frame, ms, (unsigned long long)compile_wait,
+        const auto wait = Vulkan::WaitDiagnostics::Get().TakeLongestWait();
+        const auto separator = wait.file.find_last_of("/\\");
+        const auto wait_file = wait.file.substr(separator == std::string_view::npos ? 0 : separator + 1);
+        if (std::fprintf(file, "%llu,%.6f,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,"
+                               "%.*s,%u,%llu,%llu\n",
+                         (unsigned long long)frame, ms, (unsigned long long)renderer_flip,
+                         (unsigned long long)submit_gap,
+                         (unsigned long long)submit_to_queue, (unsigned long long)queue_wait,
+                         (unsigned long long)compile_wait,
                          (unsigned long long)(current[0] - previous[0]),
                          (unsigned long long)(current[1] - previous[1]),
                          (unsigned long long)(current[2] - previous[2]),
@@ -86,7 +96,9 @@ public:
                          (unsigned long long)(current[7] - previous[7]),
                          (unsigned long long)(current[8] - previous[8]),
                          (unsigned long long)(current[9] - previous[9]),
-                         (unsigned long long)images, (unsigned long long)buffers) < 0) {
+                         (unsigned long long)images, (unsigned long long)buffers,
+                         static_cast<int>(wait_file.size()), wait_file.empty() ? "" : wait_file.data(),
+                         wait.line, (unsigned long long)wait.tick, (unsigned long long)wait.wait_ns) < 0) {
             Fail();
         }
     }
@@ -377,6 +389,21 @@ void VideoOutDriver::Flip(const Request& req) {
     });
     Vulkan::FrameCapture::OnFlip(req.index >= 0 ? req.port->buffer_slots[req.index].address_left
                                                 : 0);
+    static auto last_submitted_at = std::chrono::steady_clock::time_point{};
+    const u64 submit_gap_ns = last_submitted_at.time_since_epoch().count() == 0 ||
+                                      req.submitted_at <= last_submitted_at
+                                  ? 0
+                                  : std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        req.submitted_at - last_submitted_at)
+                                        .count();
+    last_submitted_at = req.submitted_at;
+    const auto flip_processed_at = std::chrono::steady_clock::now();
+    const u64 submit_to_queue_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       req.queued_at - req.submitted_at)
+                                       .count();
+    const u64 videoout_queue_wait_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                           flip_processed_at - req.queued_at)
+                                           .count();
 
     // port: THEORDER_FRAME_STATS=1 prints flip rate and frame time spread every 5 seconds.
     static const bool frame_stats = EmulatorSettingsImpl::Flag("THEORDER_FRAME_STATS", true);
@@ -424,8 +451,9 @@ void VideoOutDriver::Flip(const Request& req) {
         const u64 buffer_bytes = PortStats::buffer_upload_bytes.load();
         static FrameTrace trace;
         if (had_interval) {
-            trace.Write(flip_count, frame_ms, compile_wait - last_compile_wait, wait_now, last_wait,
-                        image_bytes - last_image_bytes, buffer_bytes - last_buffer_bytes);
+            trace.Write(flip_count, frame_ms, req.renderer_flip, submit_gap_ns, submit_to_queue_ns,
+                        videoout_queue_wait_ns, compile_wait - last_compile_wait, wait_now,
+                        last_wait, image_bytes - last_image_bytes, buffer_bytes - last_buffer_bytes);
         }
         last_compile_wait = compile_wait;
         if (stall) {
@@ -699,6 +727,7 @@ void VideoOutDriver::DrawLastFrame() {
 
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
+    const auto submitted_at = std::chrono::steady_clock::now();
     {
         std::unique_lock lock{port->port_mutex};
         if (index != -1 && port->flip_status.flip_pending_num > 16) {
@@ -717,15 +746,18 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
 
     if (!is_eop) {
         // Non EOP flips can arrive from any thread so ask GPU thread to perform them
-        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop); });
+        liverpool->SendCommand([=, this]() {
+            SubmitFlipInternal(port, index, flip_arg, is_eop, submitted_at);
+        });
     } else {
-        SubmitFlipInternal(port, index, flip_arg, is_eop);
+        SubmitFlipInternal(port, index, flip_arg, is_eop, submitted_at);
     }
 
     return true;
 }
 
-void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop) {
+void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_arg, bool is_eop,
+                                        std::chrono::steady_clock::time_point submitted_at) {
     Vulkan::Frame* frame;
     if (index == -1) {
         frame = presenter->PrepareBlankFrame(false);
@@ -735,6 +767,7 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
         const auto& group = port->groups[buffer.group_index];
         frame = presenter->PrepareFrame(group, buffer.address_left);
     }
+    const u64 renderer_flip = PortStats::flips.load(std::memory_order_relaxed);
 
     {
         std::scoped_lock lock{mutex};
@@ -744,6 +777,9 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
             .flip_arg = flip_arg,
             .index = index,
             .eop = is_eop,
+            .submitted_at = submitted_at,
+            .queued_at = std::chrono::steady_clock::now(),
+            .renderer_flip = renderer_flip,
         });
     }
     request_cv.notify_one();

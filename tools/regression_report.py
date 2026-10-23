@@ -37,6 +37,24 @@ COMPUTE_REUSE = re.compile(
     r'Compute pipeline reuse: shader ([0-9a-f]{16}) permutation (\d+) -> (\d+) '
     r'\(SPIR-V ([0-9a-f]{16})\)'
 )
+GRAPHICS_PIPELINE_WAIT = re.compile(
+    r'Graphics pipeline wait: flip (\d+) key 0x([0-9a-f]{1,16}) '
+    r'stage0 0x([0-9a-f]{1,16}) stage4 0x([0-9a-f]{1,16}) '
+    r'spv0 0x([0-9a-f]{1,16}) spv4 0x([0-9a-f]{1,16}) '
+    r'wait ([\d.]+) ms(?: prep (-?[\d.]+) ms(?: prep_status (\w+))?)?'
+    r'(?: source (\w+))?'
+    r'(?: queue ([\d.]+) ms create ([\d.]+) ms)? '
+    r'(?:all_stages \[([\d,]+)\] all_spvs \[([\d,]+)\] )?'
+    r'outcome (ready|published|failed)'
+)
+SHADER_COMPILATION_WAIT = re.compile(
+    r'Shader compilation wait: flip (\d+) shader 0x([0-9a-f]{1,16}) '
+    r'stage (\d+) permutation (\d+) wait ([\d.]+) ms'
+)
+WAIT_PROFILE = re.compile(
+    r'Wait profile: ([^:]+):(\d+); (\d+) calls, CPU submit ([\d.]+) ms, '
+    r'semaphore wait ([\d.]+) ms, max wait ([\d.]+) ms'
+)
 GAME_IDENTITY = re.compile(
     r'Patches: (CUSA\d+) (\d{2}\.\d{2}), eboot\.bin sha256 ([0-9a-fA-F]{64})'
 )
@@ -83,6 +101,15 @@ def parse_frame_trace(stream):
     if not reader.fieldnames or not {'frame', 'frame_ms'}.issubset(reader.fieldnames):
         raise ValueError('frame trace requires frame and frame_ms columns')
     intervals = []
+    timing_columns = {
+        'guest_submit_gap_ns': 'guest_submit_gap',
+        'submit_to_queue_ns': 'submit_to_queue',
+        'videoout_queue_wait_ns': 'videoout_queue_wait',
+    }
+    timings = {name: [] for column, name in timing_columns.items()
+               if column in (reader.fieldnames or [])}
+    gpu_wait_sites = {}
+    has_gpu_wait_event = 'gpu_tick_wait_max_ns' in (reader.fieldnames or [])
     previous = 0
     for row in reader:
         try:
@@ -93,10 +120,44 @@ def parse_frame_trace(stream):
             raise ValueError(f'invalid frame trace row {reader.line_num}')
         previous = frame
         intervals.append(ms)
+        for column, name in timing_columns.items():
+            if name in timings:
+                try:
+                    value = int(row[column])
+                except (TypeError, ValueError) as error:
+                    raise ValueError(f'invalid frame trace row {reader.line_num}') from error
+                if value < 0:
+                    raise ValueError(f'invalid frame trace row {reader.line_num}')
+                timings[name].append(value / 1e6)
+        if has_gpu_wait_event:
+            try:
+                wait_ns = int(row.get('gpu_tick_wait_max_ns') or 0)
+                wait_line = int(row.get('gpu_tick_wait_line') or 0)
+                target_tick = int(row.get('gpu_tick_wait_target_tick') or 0)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f'invalid GPU wait trace row {reader.line_num}') from error
+            wait_file = row.get('gpu_tick_wait_file') or ''
+            if wait_ns < 0 or wait_line < 0 or target_tick < 0:
+                raise ValueError(f'invalid GPU wait trace row {reader.line_num}')
+            if wait_ns:
+                if not wait_file or not wait_line:
+                    raise ValueError(f'incomplete GPU wait trace row {reader.line_num}')
+                key = (wait_file, wait_line)
+                site = gpu_wait_sites.setdefault(key, {
+                    'file': wait_file, 'line': wait_line, 'intervals': 0,
+                    'sampled_wait_ns': 0, 'max_wait_ns': 0,
+                    'max_frame': None, 'max_target_tick': None,
+                })
+                site['intervals'] += 1
+                site['sampled_wait_ns'] += wait_ns
+                if wait_ns > site['max_wait_ns']:
+                    site['max_wait_ns'] = wait_ns
+                    site['max_frame'] = frame
+                    site['max_target_tick'] = target_tick
     duration_ms = sum(intervals)
     median = percentile(intervals, 50)
     stutters = sum(ms > 1.5 * median for ms in intervals) if intervals else 0
-    return {
+    result = {
         'samples': len(intervals),
         'duration_seconds': duration_ms / 1000,
         'fps_mean': len(intervals) * 1000 / duration_ms if duration_ms else None,
@@ -109,6 +170,12 @@ def parse_frame_trace(stream):
         'stutters_per_minute': stutters * 60000 / duration_ms if duration_ms else None,
         'stutter_definition': 'frame_ms > 1.5 * whole-trace median',
     }
+    for name, values in timings.items():
+        result[f'{name}_p95_ms'] = percentile(values, 95)
+        result[f'{name}_max_ms'] = max(values, default=None)
+    result['gpu_tick_wait_site_samples'] = sorted(
+        gpu_wait_sites.values(), key=lambda site: (-site['max_wait_ns'], site['file'], site['line']))
+    return result
 
 
 def parse_log(text, seconds):
@@ -184,6 +251,32 @@ def parse_log(text, seconds):
             {'shader': shader, 'permutation': int(index), 'pipeline_permutation': int(canonical),
              'spirv_hash': spirv}
             for shader, index, canonical, spirv in COMPUTE_REUSE.findall(text)
+        ],
+        'graphics_pipeline_waits': [
+            {'flip': int(flip), 'key': key.zfill(16), 'stage0': stage0.zfill(16),
+             'stage4': stage4.zfill(16), 'spv0': spv0.zfill(16), 'spv4': spv4.zfill(16),
+             'wait_ms': float(wait_ms), 'prep_ms': float(prep_ms) if prep_ms and float(prep_ms) >= 0 else None,
+             'prep_status': prep_status or None,
+             'source': source or None,
+             'queue_ms': float(queue_ms) if queue_ms else None,
+             'create_ms': float(create_ms) if create_ms else None,
+             'stage_hashes': [f'{int(value):016x}' for value in stage_hashes.split(',')]
+             if stage_hashes else None,
+             'spv_hashes': [f'{int(value):016x}' for value in spv_hashes.split(',')]
+             if spv_hashes else None, 'outcome': outcome}
+            for flip, key, stage0, stage4, spv0, spv4, wait_ms, prep_ms, prep_status, source, queue_ms, create_ms,
+                stage_hashes, spv_hashes, outcome
+            in GRAPHICS_PIPELINE_WAIT.findall(text)
+        ],
+        'shader_compilation_waits': [
+            {'flip': int(flip), 'shader': shader.zfill(16), 'stage': int(stage),
+             'permutation': int(permutation), 'wait_ms': float(wait_ms)}
+            for flip, shader, stage, permutation, wait_ms in SHADER_COMPILATION_WAIT.findall(text)
+        ],
+        'wait_profiles': [
+            {'site': site, 'line': int(line), 'calls': int(calls),
+             'submit_ms': float(submit), 'wait_ms': float(wait), 'max_wait_ms': float(maximum)}
+            for site, line, calls, submit, wait, maximum in WAIT_PROFILE.findall(text)
         ],
         'stall_frame_ms': stall_ms,
         'validation_vuids': vuids,
@@ -603,6 +696,67 @@ def render_markdown(manifest, report_dir=None):
                 f"stutters/min: {_format(trace['stutters_per_minute'])} "
                 f"(>1.5x whole-trace median). CSV: `{run.get('frame_trace_path')}`. "
                 "Captured intervals exclude startup before the first flip and may omit the unflushed tail.")
+            videoout_metrics = [
+                (name, trace.get(f'{name}_p95_ms'), trace.get(f'{name}_max_ms'))
+                for name in ('guest_submit_gap', 'submit_to_queue', 'videoout_queue_wait')
+                if trace.get(f'{name}_p95_ms') is not None
+            ]
+            if videoout_metrics:
+                lines.append('- VideoOut timing P95/max (ms): ' + '; '.join(
+                    f'{name} {_format(p95)}/{_format(maximum)}' for name, p95, maximum in videoout_metrics))
+            gpu_wait_sites = trace.get('gpu_tick_wait_site_samples', [])
+            if gpu_wait_sites:
+                top = ', '.join(
+                    f"{site['file']}:{site['line']} ({site['intervals']} intervals, "
+                    f"max {_format(site['max_wait_ns'] / 1e6)} ms, target tick {site['max_target_tick']})"
+                    for site in gpu_wait_sites[:5])
+                lines.append('- Longest GPU semaphore wait per frame interval: ' + top +
+                             '. These are per-interval maxima, not total wait counts.')
+        pipeline_waits = metrics.get('graphics_pipeline_waits', [])
+        if pipeline_waits:
+            prep_samples = [wait.get('prep_ms') for wait in pipeline_waits
+                            if wait.get('prep_ms') is not None]
+            queue_samples = [wait.get('queue_ms') for wait in pipeline_waits if wait.get('queue_ms') is not None]
+            create_samples = [wait.get('create_ms') for wait in pipeline_waits if wait.get('create_ms') is not None]
+            breakdown = ''
+            if queue_samples and len(queue_samples) == len(pipeline_waits) and len(create_samples) == len(pipeline_waits):
+                breakdown = (f"; queue {sum(queue_samples):.1f} ms, pipeline creation "
+                             f"{sum(create_samples):.1f} ms")
+            if prep_samples and len(prep_samples) == len(pipeline_waits):
+                breakdown += f"; preparation lead max {_format(max(prep_samples))} ms"
+            prep_statuses = {}
+            for wait in pipeline_waits:
+                if wait.get('prep_status'):
+                    prep_statuses[wait['prep_status']] = prep_statuses.get(wait['prep_status'], 0) + 1
+            if prep_statuses:
+                breakdown += '; preparation association ' + ', '.join(
+                    f'{status} {count}' for status, count in sorted(prep_statuses.items()))
+            sources = {}
+            for wait in pipeline_waits:
+                if wait.get('source'):
+                    sources[wait['source']] = sources.get(wait['source'], 0) + 1
+            if sources:
+                breakdown += '; wait source ' + ', '.join(
+                    f'{source} {count}' for source, count in sorted(sources.items()))
+            lines.append(
+                f"- Visible graphics pipeline waits: {len(pipeline_waits)} events, "
+                f"{sum(wait['wait_ms'] for wait in pipeline_waits):.1f} ms total, "
+                f"max {_format(max(wait['wait_ms'] for wait in pipeline_waits))} ms, "
+                f"{sum(wait['wait_ms'] > 50 for wait in pipeline_waits)} over 50 ms{breakdown}; "
+                "per-event keys and SPIR-V hashes are in the manifest.")
+        wait_profiles = metrics.get('wait_profiles', [])
+        if wait_profiles:
+            sites = {}
+            for entry in wait_profiles:
+                site = (entry['site'], entry['line'])
+                totals = sites.setdefault(site, {'calls': 0, 'wait_ms': 0.0, 'max_wait_ms': 0.0})
+                totals['calls'] += entry['calls']
+                totals['wait_ms'] += entry['wait_ms']
+                totals['max_wait_ms'] = max(totals['max_wait_ms'], entry['max_wait_ms'])
+            top_sites = sorted(sites.items(), key=lambda item: item[1]['wait_ms'], reverse=True)[:5]
+            lines.append('- GPU semaphore wait sites (summed call time; calls may overlap): ' + '; '.join(
+                f"{site}:{line} {value['calls']} calls, {value['wait_ms']:.1f} ms, "
+                f"max {value['max_wait_ms']:.1f} ms" for (site, line), value in top_sites))
         visual = run.get('visual') or {}
         if visual:
             lines.append(f"- Visual comparison: `{visual.get('reference_status', 'unreviewed')}`; "

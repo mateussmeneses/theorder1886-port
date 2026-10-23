@@ -16,7 +16,13 @@ public:
         unsigned line{}, calls{};
         uint64_t submit_ns{}, wait_ns{}, max_wait_ns{};
     };
-    void Add(std::string_view file, unsigned line, uint64_t submit, uint64_t wait) {
+    struct LongestWait {
+        std::string_view file{};
+        unsigned line{};
+        uint64_t tick{}, wait_ns{};
+    };
+    void Add(std::string_view file, unsigned line, uint64_t submit, uint64_t wait,
+             uint64_t tick = 0) {
         std::scoped_lock lock{mutex};
         auto* entry = &entries.back();
         for (unsigned i = 0; i + 1 < entries.size(); ++i) {
@@ -32,11 +38,20 @@ public:
         entry->submit_ns += submit;
         entry->wait_ns += wait;
         entry->max_wait_ns = std::max(entry->max_wait_ns, wait);
+        if (wait > longest_wait.wait_ns) {
+            longest_wait = {file, line, tick, wait};
+        }
     }
     std::array<Entry, 64> Take() {
         std::scoped_lock lock{mutex};
         const auto result = entries;
         entries = {};
+        return result;
+    }
+    LongestWait TakeLongestWait() {
+        std::scoped_lock lock{mutex};
+        const auto result = longest_wait;
+        longest_wait = {};
         return result;
     }
     static bool Enabled() {
@@ -67,5 +82,6 @@ public:
 private:
     std::mutex mutex;
     std::array<Entry, 64> entries{};
+    LongestWait longest_wait{};
 };
 }

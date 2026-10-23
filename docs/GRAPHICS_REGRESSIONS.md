@@ -44,3 +44,27 @@ driver version, output resolution, upscaler and graphics settings. Existing
 only: test one token at a time against an unchanged baseline, preserving saves
 and caches. Shader-changing tokens use distinct cache versions. A menu/prologue
 smoke test cannot validate the Chapter 5/8/9 defects.
+
+## 2026-10-22 O5 symptom matrix
+
+| Issue | Hardware/build/scene evidence | Log/capture evidence and limits | Status |
+| --- | --- | --- | --- |
+| #45 | RTX 4080 Laptop, v0.7.6; washed-out characters and crushed environment. Driver, scene, output mode, HDR/sRGB and upscaler are unknown. | No usable `last_run.log` or pass capture; cannot trace exposure/histogram, additive targets, or final color conversion. | Inconclusive; request one fixed scene and a frame capture. |
+| #43 | RTX 3060 Ti; black/white or dark output near startup across reported 0.7.x builds. | No log or first-frame capture in the available triage record; keep separate from #47's AMD case. | Pending first-frame composition/presenter capture. |
+| #47 | RX 6500 XT, driver 26.10.1, v0.7.6; black screen with text visible. A v0.7.7 retest was requested Oct 22; no result is present in the accessible issue page. | No `last_run.log`, output mode, CUSA, or presenter/framebuffer capture. | Pending reporter retest; no confirmed fix. |
+| #36 | RX 6700 XT, v0.7.5; generic lighting report without a chapter. Log identifies CUSA00035 01.02, eboot `f742eb17…`, 1920x1080, FSR 3.1 on. | 65 logged stall records, 28 over 100 ms, worst 761.5 ms; max GPU-tick wait 53.5 ms. Two HTILE-read markers do not identify the bad pass; no validation error or frame capture. | Inconclusive; lighting symptom not localized. |
+| #39 | RX 9070 / Adrenalin 26.8.1, v0.7.5, Chapter 5. Log identifies CUSA00076 01.02, eboot `a8ce5fe1…`, 1920x1080, FSR 3.1 on. | 171 logged stall records, 80 over 100 ms, worst 1048.9 ms; max GPU-tick wait 14.2 ms. Log has no VSM shader hash, pass capture, or Vulkan validation error. | Green/blue flares remain unlocalized. |
+| #63 | Same RX 9070, driver, CUSA and eboot; retested after v0.7.7 in Chapters 8/9, FSR off at 2560x1440. This differs from #39's scene, build and output settings. | Chapter 8/9 logs contain 177 stall records, 137 over 100 ms, worst 7759.1 ms; max GPU-tick wait 11.6 ms, readback wait 0, host-copy max 3.7 ms. Concurrent driver-compile totals can exceed a frame and do not attribute its stall. No Vulkan validation error or pass capture. | Artifacts and stutter persist after v0.7.7; cause unresolved. |
+
+The downloaded issue logs were reviewed locally and are not retained in the worktree;
+only the sanitized facts above are recorded. Their frame-stall summaries lack the
+pass, resource and image IDs needed to associate a long frame with a green/blue
+artifact. None of these cases supplied a logged HDR/sRGB mode. Therefore #45, #36,
+#39, #43, #47 and #63 remain unconfirmed; no gamma, exposure, shader or vendor
+workaround is justified by these records.
+
+For a reporter-side capture, keep the original save and settings, fix one scene,
+camera/input, resolution and upscaler state, then use `tools/batch_runs.py` with
+`--frame-trace --present-frames 3 --frame-capture-at <same-time> --validation`.
+Capture the untouched baseline first; test only one diagnostic toggle in a separate
+run and include a fresh redacted `last_run.log`, CUSA/eboot, GPU/driver and scene.

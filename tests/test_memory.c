@@ -169,6 +169,21 @@ static void hook_queue_grows(void) {
     CHECK(pending_count == 0);
 }
 
+/* Backing-view writes (fence labels) land whole at any alignment, below and above 64 bytes. */
+static void write_backing_stores_each_byte(void) {
+    void *p = NULL;
+    CHECK(map_flexible(&p, PAGE, 3, 0) == 0 && p);
+    unsigned char *m = p, data[100];
+    for (unsigned i = 0; i < sizeof(data); ++i) data[i] = (unsigned char)(i + 1);
+    for (unsigned offset = 0; offset < 8; ++offset)
+        for (unsigned n = 1; n <= sizeof(data); n += 13) {
+            memset(m, 0, 2 * sizeof(data));
+            CHECK(runtime_memory_write_backing((uintptr_t)m + offset, data, n));
+            CHECK(memcmp(m + offset, data, n) == 0 && m[offset + n] == 0 && (!offset || m[offset - 1] == 0));
+        }
+    CHECK(release_flexible(p, PAGE) == 0);
+}
+
 /* Released pages read as zero when they are handed out again (the game relies on it). */
 static void released_pages_read_zero(void) {
     for (int round = 0; round < 4; ++round) {
@@ -198,6 +213,7 @@ int main(int argc, char **argv) {
     fixed_map_retires_before_replacing();
     batch_retires_only_maps_that_run();
     hook_queue_grows();
+    write_backing_stores_each_byte();
     released_pages_read_zero();
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
     printf("PASS: flexible split keeps each half's pages, fixed maps retire the GPU's view before "

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Facial-depth mitigation adapted from Igor Augusto / TOport:
+// https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951
+// Modified for this port (THEORDER_* configuration, defaults and diagnostics).
 #include "bb_face_depth_fix.h"
 #include "bb_face_depth_spirv.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"

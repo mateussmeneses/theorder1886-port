@@ -203,6 +203,14 @@ III port and have not been adapted to this game.
 
 ## Credits
 
+- **Igor Augusto and TOport contributors**: [TOport](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port) provided the
+  prior public implementations adapted here for [face-depth mitigation](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951),
+  [particle SRT normalization](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951),
+  [redraw depth bias](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/fff668c), and
+  [EVSM/HTILE shadow handling](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/dfc66af).
+  These were adapted and modified in this port; they are not solely original work here.
+  See the [v0.7.3 attribution correction](docs/RELEASE-v0.7.3-ATTRIBUTION.md) (issue #69).
+
 - **Felipe Prado**: the [God of War III Remastered PC port](https://github.com/FelipePrado0/gow3_pc)
   this project is copied from.
 - **deadinside28**: [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), the original

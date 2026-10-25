@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Facial-depth interface adapted from Igor Augusto / TOport:
+// https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951
+// Modified for this port; see docs/RELEASE-v0.7.3-ATTRIBUTION.md.
 #pragma once
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"

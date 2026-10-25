@@ -207,6 +207,14 @@ God of War III y aún no se adaptaron a este juego.
 
 ## Créditos
 
+- **Igor Augusto y colaboradores de TOport**: [TOport](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port) publicó anteriormente
+  implementaciones adaptadas aquí para [profundidad facial](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951),
+  [normalización SRT de partículas](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951),
+  [sesgo de profundidad al redibujar](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/fff668c) y
+  [sombras EVSM/HTILE](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/dfc66af).
+  Estas soluciones se adaptaron y modificaron en este port; no son trabajo exclusivamente original de este repositorio.
+  Consulta la [corrección de atribución de v0.7.3](docs/RELEASE-v0.7.3-ATTRIBUTION.md) (issue #69).
+
 - **Felipe Prado**: el [port de God of War III Remastered para PC](https://github.com/FelipePrado0/gow3_pc)
   del que se copió este proyecto.
 - **deadinside28**: [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), el port nativo

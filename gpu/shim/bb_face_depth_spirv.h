@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Facial-depth SPIR-V mitigation adapted from Igor Augusto / TOport:
+// https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951
+// Modified for this port; see docs/RELEASE-v0.7.3-ATTRIBUTION.md.
 // Targeted mitigation for facial depth conflicts replay-proven in runs39/48/53.
 // This is not a translation of a newly identified guest register.
 #pragma once

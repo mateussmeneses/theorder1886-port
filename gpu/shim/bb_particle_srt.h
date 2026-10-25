@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Particle SRT normalization adapted from Igor Augusto / TOport:
+// https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/c83f951
+// Modified for this port (THEORDER_* configuration and validation differences).
 #pragma once
 #include <algorithm>
 #include <cstdlib>

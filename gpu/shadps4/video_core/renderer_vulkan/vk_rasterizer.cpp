@@ -1591,6 +1591,8 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
         }
     }
 
+    // TOport / Igor Augusto's earlier EVSM/HTILE workaround (adapted here):
+    // https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/dfc66af
     // The Order: the EVSM shadow conversion (cs 8ea0ef5b, 9846aaff) reads HTILE and
     // writes the clear depth for tiles whose zmask is 0 instead of reading them. The host does
     // not maintain HTILE, so tiles with real depth read as cleared: blocks of the sun shadow
@@ -4030,6 +4032,8 @@ void Rasterizer::UpdateDepthStencilState() const {
     }
 
     const auto depth_bias_enabled = regs.polygon_control.NeedsBias();
+    // Adapted from TOport / Igor Augusto's redraw-depth-bias experiment:
+    // https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/fff668c
     // THEORDER_REDRAW_DEPTH_BIAS=<units> (default 128.0f): universal facial & character redraw depth bias.
     // A pass that redraws the same mesh over an earlier pass (depth test LessEqual, no depth
     // write, no bias of its own) relies on bit-identical positions; on PC GPUs floating-point

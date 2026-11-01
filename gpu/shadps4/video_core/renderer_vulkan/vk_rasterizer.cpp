@@ -1707,6 +1707,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     ResetBindings(true);
+    if (cs.pgm_hash == 0x7b1b18c9) buffer_cache.RecordSunCopies();
     scheduler.KickRecording();
 }
 
@@ -2762,6 +2763,11 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if (desc.is_written &&
+                (stage.uses_buffer_atomic_float_min_max || stage.pgm_hash == 0x7550d841 ||
+                 stage.pgm_hash == 0x7b1b18c9)) {
+                buffer_cache.KeepPageSynchronized(vsharp.base_address, vsharp.GetSize(), stage.pgm_hash);
+            }
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
@@ -3686,6 +3692,31 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         const bool is_stencil_clear = regs.depth_render_control.stencil_clear_enable;
         texture_cache.TouchMeta(htile_address, slice, false);
         ASSERT(desc.view_info.range.extent.levels == 1 && !image.binding.needs_rebind);
+        static const bool htile_draw_expand = [] {
+            const char* env = std::getenv("THEORDER_HTILE_DRAW_EXPAND");
+            if (!env) env = std::getenv("BB_HTILE_DRAW_EXPAND");
+            return !env || env[0] != '0';
+        }();
+        if (htile_draw_expand && htile_address && regs.depth_control.depth_enable &&
+            regs.depth_control.depth_write_enable &&
+            (is_depth_clear || !uncompressed_htiles.contains(htile_address))) {
+            const auto& info = image.info;
+            const u32 tiles_x = Common::AlignUp((info.size.width + 7) / 8, 64u);
+            const u32 tiles_y = Common::AlignUp((info.size.height + 7) / 8, 64u);
+            const u64 size = memory->ClampRangeSize(
+                htile_address, u64(tiles_x) * tiles_y * 4 * std::max<u32>(info.resources.layers, 1u));
+            if (size) {
+                static constexpr u32 ZmaskUncompressed = 0xf;
+                const auto [buffer, offset] =
+                    buffer_cache.ObtainBuffer(htile_address, static_cast<u32>(size),
+                                              VideoCore::ObtainBufferFlags::IsWritten);
+                runtime.FillBuffer(buffer, offset, size, ZmaskUncompressed);
+                if (uncompressed_htiles.insert(htile_address).second) {
+                    std::printf("HTILE: %#llx marked uncompressed, %llu bytes\n",
+                                (unsigned long long)htile_address, (unsigned long long)size);
+                }
+            }
+        }
 
         const bool has_stencil = image.info.props.has_stencil;
         // Stencil writes can be enabled while depth writes are off.

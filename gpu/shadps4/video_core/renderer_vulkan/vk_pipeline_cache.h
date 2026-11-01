@@ -58,6 +58,7 @@ struct Program {
         /// port: made this session, at the next free index: a stored pipeline key with that
         /// index may be another session's permutation there (not "known", see GetGraphicsPipeline).
         bool fresh = false;
+        bool pending_compile = false;
         std::optional<size_t> compute_pipeline_permutation;
     };
     static constexpr size_t MaxPermutations = 8;
@@ -70,8 +71,13 @@ struct Program {
     /// whose user data the GPU thread rewrites every draw). Guarded by programs_mutex.
     std::unique_ptr<Shader::Info> info_template;
     std::shared_ptr<AsyncShaderCompilation> pending;
+    std::vector<std::shared_ptr<AsyncShaderCompilation>> pending_builds;
     bool compilation_failed = false;
     std::vector<Shader::StageSpecialization> failed_permutations;
+
+    [[nodiscard]] bool HasPending() const noexcept {
+        return pending != nullptr || !pending_builds.empty();
+    }
 
     Program() = default;
     Program(Shader::HwStage stage, Shader::SwStage l_stage, Shader::ShaderParams params)
@@ -196,6 +202,7 @@ struct PrepWorker {
 };
 
 struct PreparedDraw;
+class DrawPreparation;
 
 class PipelineCache {
 public:
@@ -211,6 +218,10 @@ public:
     bool StartBackgroundWarmUp();
     void StartOnDemand();
     void Sync();
+    void SetDrawPreparation(DrawPreparation* prep) noexcept {
+        draw_prep = prep;
+    }
+    void PublishCompletedWork();
     void ReportCompilerStats();
 
     /// port: driver pipeline cache persistence (BP08 from iss_pc)
@@ -284,6 +295,10 @@ private:
     void PublishGraphics(bool wait = false);
     void PublishCompute(bool wait = false);
     void FinishCompilations();
+    bool QueueGraphicsBuild(PipelineSelection& s, bool restore_expected);
+    void RecordDeferredSelection(const PipelineSelection& s);
+    void DrainDeferredSelections();
+    void PrequeueUpcomingPipelines();
     void SeedWorkerCaches();
     bool CheckCacheProfile();
     struct BackgroundWarmup;
@@ -380,6 +395,17 @@ private:
     tsl::robin_map<ComputePipelineKey, std::unique_ptr<ComputePipeline>> compute_pipelines;
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>> graphics_pipelines;
     PipelineSelection sel{}; ///< GPU thread selection state
+    DrawPreparation* draw_prep = nullptr;
+    struct DeferredSelection {
+        u64 signature{};
+        std::unique_ptr<AmdGpu::Regs> regs;
+        DrawIndirectParams params{};
+    };
+    std::vector<DeferredSelection> deferred_selections;
+    std::vector<std::unique_ptr<AmdGpu::Regs>> deferred_regs_pool;
+    std::unique_ptr<AmdGpu::Regs> prequeue_regs;
+    bool draining_deferred = false;
+    bool prequeue_active = false;
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
 

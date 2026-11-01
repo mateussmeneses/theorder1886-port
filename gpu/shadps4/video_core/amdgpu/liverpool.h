@@ -282,6 +282,13 @@ private:
     u32 gpu_tid{};
 #endif
     s32 curr_qid{-1};
+    std::array<std::span<const u32>, 8> remaining_dcbs{};
+    u32 remaining_dcb_depth{};
+
+public:
+    std::span<const std::span<const u32>> RemainingDcbs() const noexcept {
+        return {remaining_dcbs.data(), remaining_dcb_depth};
+    }
 };
 
 } // namespace AmdGpu

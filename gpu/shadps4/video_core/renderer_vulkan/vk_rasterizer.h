@@ -320,6 +320,13 @@ private:
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline, const PreparedDraw* prepared);
     void EmitVertexBuffers();
     void ResolveIndexBuffer(u32 index_offset, bool is_indirect = false);
+    /// port (adapted from JulioCacko/The-Order-1886_pc 386715a1 + 471969f7, via
+    /// IgorAugustoHH/The-Order-1886-PC-Port 726b0ab08a): copies indexed indirect records into
+    /// clamped_args with each index count bounded by the bound index buffer, so a GPU-written
+    /// count past the buffer cannot keep the GPU busy. Returns where the draw reads them (the
+    /// source itself when the draw is left untouched).
+    std::pair<vk::Buffer, u64> ClampIndexedIndirect(const VideoCore::Buffer* args, u64 offset,
+                                                    u32 count, u32 stride);
     void EmitIndexBuffer();
 
     void ResetBindings(bool is_compute);
@@ -468,7 +475,18 @@ private:
         u64 offset;
         vk::DeviceSize size;
         vk::IndexType type;
+        /// port: indices an indirect draw may read (~0: no INDEX_BUFFER_SIZE, unknown bound).
+        u32 count = ~0u;
     } index_bind{};
+    /// port: indexed indirect arguments with clamped index counts (ClampIndexedIndirect), a ring
+    /// of device-local memory reused across draws; the old ring is freed once the GPU passes it.
+    std::shared_ptr<VideoCore::Buffer> clamped_args;
+    u64 clamped_args_size = 0;
+    u64 clamped_args_head = 0;
+    /// port: diagnostics for anomalous indirect draws (THEORDER_INDIRECT_DIAG=1).
+    u64 indirect_clamp_passes = 0;
+    u64 indirect_records_clamped = 0;
+    u64 indirect_anomalies = 0;
     /// The direct draw whose vertex/index buffers BindResources may resolve early.
     struct DrawInputs {
         const GraphicsPipeline* pipeline;

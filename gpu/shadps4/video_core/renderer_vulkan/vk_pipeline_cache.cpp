@@ -2410,7 +2410,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             info.AddBindings(binding);
             return {};
         }
-        if ((!multi_perm && program->HasPending()) || program->HasPendingPermutation(spec)) {
+        if (!multi_perm && program->HasPending()) {
             if (async_compute_perm) {
                 pending_compute_fallback_pgm = params.hash;
                 pending_compute_fallback_spec = std::move(spec);

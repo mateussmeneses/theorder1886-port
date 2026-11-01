@@ -819,6 +819,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             const u32 count = header->type3.NumWords();
             const PM4ItOpcode opcode = header->type3.opcode;
             ApplyGraphicsRegisterPacket(regs, header, gfx_reg_checksum, &pipe_dirty);
+            if (static_cast<u32>(dcb_depth) < remaining_dcbs.size()) {
+                remaining_dcbs[dcb_depth] = NextPacket(dcb, count + 1);
+                remaining_dcb_depth = static_cast<u32>(dcb_depth) + 1;
+            }
             // DmaData to 0x3022C does nothing here (skipped below): no need to wait.
             if (rasterizer && !PipelinedOpcode(opcode) &&
                 !(opcode == PM4ItOpcode::DmaData &&
@@ -1473,6 +1477,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             break;
         }
     }
+    if (static_cast<u32>(dcb_depth) < remaining_dcbs.size()) {
+        remaining_dcbs[dcb_depth] = {};
+        remaining_dcb_depth = static_cast<u32>(dcb_depth);
+    }
 
     if (ce_task.handle) {
         while (!ce_task.handle.done()) {
@@ -1482,6 +1490,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     }
 
     if (rasterizer && seq != NoSeq) {
+        rasterizer->GetPipelineCache().PublishCompletedWork();
         rasterizer->RetireSubmission(); // prepared draws live until the recording thread is past
     }
     if (draw_prep) {

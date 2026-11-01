@@ -199,6 +199,7 @@ void PrepareVertexInputs(const Shader::Info& vs, const Shader::Gcn::FetchShaderD
 
 DrawPreparation::DrawPreparation(PipelineCache& pipeline_cache_)
     : pipeline_cache{pipeline_cache_} {
+    pipeline_cache.SetDrawPreparation(this);
     worker_count = DefaultWorkerCount();
     if (worker_count) {
         scanner = std::jthread([this](std::stop_token stop) { ScannerLoop(stop); });
@@ -211,6 +212,7 @@ DrawPreparation::DrawPreparation(PipelineCache& pipeline_cache_)
 }
 
 DrawPreparation::~DrawPreparation() {
+    pipeline_cache.SetDrawPreparation(nullptr);
     for (auto& worker : workers) {
         worker.request_stop();
     }

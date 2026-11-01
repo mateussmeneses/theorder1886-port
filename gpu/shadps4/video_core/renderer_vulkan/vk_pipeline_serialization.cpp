@@ -1618,7 +1618,7 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
     }
     // The game already uses this shader: its permutations are the ones that count.
     Program& program = *it_pgm->second;
-    if (program.pending) {
+    if (program.HasPending()) {
         stage.why = "program compiling";
         return false; // the game is compiling a permutation that takes the next index
     }

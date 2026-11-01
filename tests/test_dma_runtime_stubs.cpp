@@ -11,10 +11,8 @@
 #undef runtime_memory_region
 #include <cstring>
 extern "C" {
-void runtime_report() { std::abort(); }
 void runtime_memory_read_backing(uintptr_t, void* data, uint64_t size) { std::memset(data, 0x55, size); }
 void runtime_memory_gpu_protect(uintptr_t, uint64_t, int, int) {}
 uint64_t runtime_memory_clamp(uintptr_t, uint64_t size) { return size; }
 int runtime_memory_region(uintptr_t, uintptr_t*, uintptr_t*, int*) { return 0; }
-int runtime_memory_is_mapped(uintptr_t, uint64_t) { return 1; }
 }

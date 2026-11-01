@@ -78,47 +78,75 @@ struct Program {
         : info{stage, l_stage, params} {}
 
     void AddPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec, u64 spv_hash) {
+        const size_t idx = modules.size();
         modules.emplace_back(module, std::move(spec), spv_hash);
         modules.back().fresh = true;
+        (void)StagePipelinePermutation(idx);
     }
 
-    size_t ComputePipelinePermutation(size_t index) {
-        auto& selected = modules[index];
-        if (info.sw_stage != Shader::SwStage::Compute || !selected.spv_hash ||
-            !selected.spec.Valid()) {
+    bool CompatibleStagePermutation(size_t index, size_t candidate) const {
+        if (index >= modules.size() || candidate >= modules.size()) {
+            return false;
+        }
+        const auto& selected = modules[index];
+        const auto& other = modules[candidate];
+        if (!selected.spv_hash || other.spv_hash != selected.spv_hash || !selected.spec.Valid() ||
+            !other.spec.Valid()) {
+            return false;
+        }
+        const auto& a = selected.spec;
+        const auto& b = other.spec;
+        return a.runtime_info == b.runtime_info && a.start == b.start &&
+               a.fetch_shader_data == b.fetch_shader_data && a.vs_attribs == b.vs_attribs &&
+               a.buffers.size() == b.buffers.size() && a.samplers.size() == b.samplers.size() &&
+               a.fmasks.size() == b.fmasks.size() && a.images == b.images;
+    }
+
+    size_t StagePipelinePermutation(size_t index) const {
+        if (index >= modules.size()) {
             return index;
         }
-        // The same emitted binary can result from different resource specializations.
-        // Keep their metadata, but reuse a pipeline only with the same descriptor ABI.
-        // Image specializations must also match: a pipeline may retain a fallback-image
-        // mask used by BindTextures even when it is later selected for an exact dispatch.
-        const auto compatible = [&](size_t candidate) {
-            const auto& other = modules[candidate];
-            const auto& a = selected.spec;
-            const auto& b = other.spec;
-            return other.spv_hash == selected.spv_hash && b.Valid() &&
-                   a.runtime_info == b.runtime_info && a.start == b.start &&
-                   a.buffers.size() == b.buffers.size() && a.samplers.size() == b.samplers.size() &&
-                   a.fmasks.size() == b.fmasks.size() && a.images == b.images;
-        };
+        const auto& selected = modules[index];
+        if (!selected.spv_hash || !selected.spec.Valid()) {
+            return index;
+        }
         if (selected.compute_pipeline_permutation &&
-            compatible(*selected.compute_pipeline_permutation)) {
+            CompatibleStagePermutation(index, *selected.compute_pipeline_permutation)) {
             return *selected.compute_pipeline_permutation;
         }
         for (size_t candidate = 0; candidate < index; ++candidate) {
-            if (compatible(candidate)) {
-                selected.compute_pipeline_permutation = candidate;
+            if (CompatibleStagePermutation(index, candidate)) {
                 return candidate;
             }
         }
-        selected.compute_pipeline_permutation = index;
         return index;
+    }
+
+    size_t StagePipelinePermutation(size_t index) {
+        if (index >= modules.size()) {
+            return index;
+        }
+        auto& selected = modules[index];
+        if (!selected.spv_hash || !selected.spec.Valid()) {
+            return index;
+        }
+        const size_t canonical = std::as_const(*this).StagePipelinePermutation(index);
+        selected.compute_pipeline_permutation = canonical;
+        return canonical;
+    }
+
+    size_t ComputePipelinePermutation(size_t index) {
+        if (info.sw_stage != Shader::SwStage::Compute) {
+            return index;
+        }
+        return StagePipelinePermutation(index);
     }
 
     void InsertPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
                       size_t perm_idx, u64 spv_hash = 0) {
         modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
         modules[perm_idx] = {module, std::move(spec), spv_hash};
+        (void)StagePipelinePermutation(perm_idx);
     }
 };
 

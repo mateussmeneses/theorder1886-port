@@ -54,5 +54,12 @@ int main() {
     program.modules[1].spec.runtime_info.props.dx10_clamp = 0;
     program.info.sw_stage = Shader::SwStage::Vertex;
     Check(program.ComputePipelinePermutation(1) == 1);
-    std::puts("PASS: content-identical compute pipeline reuse");
+    Check(program.StagePipelinePermutation(1) == 0);
+    Check(std::as_const(program).StagePipelinePermutation(1) == 0);
+
+    program.modules[1].spec.vs_attribs.push_back({.num_class = AmdGpu::NumberClass::Sint});
+    program.modules[1].compute_pipeline_permutation.reset();
+    Check(program.StagePipelinePermutation(1) == 1);
+    Check(std::as_const(program).StagePipelinePermutation(1) == 1);
+    std::puts("PASS: content-identical compute and stage pipeline reuse");
 }

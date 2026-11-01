@@ -1013,6 +1013,14 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     vk::ShaderModule module{};
     u64 module_hash = spv_hash;
 
+    static const bool warm_load_program = [] {
+        const char* env = std::getenv("THEORDER_WARM_LOAD_PROGRAM");
+        return !env || env[0] != '0';
+    }();
+    if (warm_load_program && !program_cache.contains(program->info.pgm_hash)) {
+        LoadCachedProgram(program->info.pgm_hash, program->info.hw_stage);
+    }
+
     auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
     if (new_program) {
         module = CompileSPV(spv, instance.GetDevice());
@@ -1146,6 +1154,10 @@ vk::ShaderModule PipelineCache::LoadDeferredModule(Program& program, size_t perm
         return {};
     }
     entry.module = CompileSPV(spv, instance.GetDevice());
+    (void)program.StagePipelinePermutation(perm_idx);
+    if (program.info.sw_stage == Shader::SwStage::Vertex) {
+        BbFaceDepth::Register(entry.module, spv, program.info.pgm_hash);
+    }
     return entry.module;
 }
 
@@ -1585,6 +1597,10 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
                     if (!spv.empty() && SpvHash(spv) == stage->spv_hash) {
                         const auto module_started = std::chrono::steady_clock::now();
                         stage->module = CompileSPV(spv, stage->device);
+                        if (stage->program->info.sw_stage == Shader::SwStage::Vertex) {
+                            BbFaceDepth::Register(stage->module, spv,
+                                                  stage->program->info.pgm_hash);
+                        }
                         module_time = ElapsedNs(module_started);
                         warm.module_ns += module_time;
                         ++warm.modules;
@@ -1643,6 +1659,7 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
         if (!it->module) { // a deferred cached permutation (LoadCachedProgram): use this one
             it->module = stage.module;
             it->spv_hash = stage.spv_hash;
+            (void)program.StagePipelinePermutation(std::distance(program.modules.begin(), it));
             stage.module_kept = true;
         }
         stage.result = it->module;
@@ -1726,6 +1743,21 @@ void PipelineCache::PumpWarmUp() {
         std::array<vk::ShaderModule, MaxShaderStages> modules{};
         std::optional<Shader::Gcn::FetchShaderData> fetch;
         bool usable = true;
+        static const bool warm_load_program = [] {
+            const char* env = std::getenv("THEORDER_WARM_LOAD_PROGRAM");
+            return !env || env[0] != '0';
+        }();
+        if (warm_load_program) {
+            for (u32 i = 0; i < MaxShaderStages; ++i) {
+                if (!entry.stages[i] || entry.stages[i]->merged) {
+                    continue;
+                }
+                const auto& info = entry.stages[i]->program->info;
+                if (!program_cache.contains(info.pgm_hash)) {
+                    LoadCachedProgram(info.pgm_hash, info.hw_stage);
+                }
+            }
+        }
         {
             std::unique_lock lock{programs_mutex};
             for (u32 i = 0; i < MaxShaderStages && usable; ++i) {

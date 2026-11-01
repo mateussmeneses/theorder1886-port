@@ -877,8 +877,14 @@ bool PipelineCache::QueueShader(Program& program, HwStage stage, SwStage l_stage
         DumpShader(spv, build->info.pgm_hash, build->info.hw_stage, build->permutation, "spv");
         auto patch = GetShaderPatch(build->info.pgm_hash, build->info.hw_stage,
                                     build->permutation, "spv");
-        build->module = CompileSPV(patch && EmulatorSettings.IsPatchShaders() ? *patch : spv,
-                                    instance.GetDevice());
+        const bool is_patched = patch && EmulatorSettings.IsPatchShaders();
+        build->module = CompileSPV(is_patched ? *patch : spv, instance.GetDevice());
+        if (build->info.sw_stage == SwStage::Vertex) {
+            BbFaceDepth::Register(build->module,
+                                  is_patched ? std::span<const u32>(*patch)
+                                             : std::span<const u32>(spv),
+                                  build->info.pgm_hash);
+        }
         build->binary = std::move(spv);
         build->ir.reset();
         compiler_pools.Recycle(std::move(build->pools));
@@ -1943,11 +1949,19 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         }
         info.AddBindings(binding);
         const size_t perm_idx = std::distance(program->modules.begin(), it);
+        static const bool reuse_stage = [] {
+            const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+            return !env || *env != '0';
+        }();
+        const size_t canonical =
+            reuse_stage && !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()
+                ? program->StagePipelinePermutation(perm_idx)
+                : perm_idx;
         worker.stages.push_back(
             {program, params.hash, hw_stage, info.pgm_base, &info.flattened_ud_buf});
-        sel.fresh_permutation |= it->fresh;
+        sel.fresh_permutation |= program->modules[canonical].fresh;
         return std::make_tuple(&info, it->module, ToFetchShader(it->spec.fetch_shader_data),
-                               HashCombine(params.hash, perm_idx));
+                               HashCombine(params.hash, canonical));
     }
 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
@@ -2095,11 +2109,15 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         perm_idx = std::distance(program->modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
     }
-    sel.fresh_permutation |= program->modules[perm_idx].fresh;
     static const bool reuse_compute = [] {
         const char* env = std::getenv("THEORDER_COMPUTE_PIPELINE_REUSE");
         return !env || *env != '0';
     }();
+    static const bool reuse_stage = [] {
+        const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+        return !env || *env != '0';
+    }();
+    size_t canonical_idx = perm_idx;
     if (hw_stage == HwStage::Compute && reuse_compute &&
         !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()) {
         const bool first_lookup = !program->modules[perm_idx].compute_pipeline_permutation;
@@ -2112,9 +2130,25 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                             static_cast<unsigned long long>(params.hash), perm_idx, canonical,
                             static_cast<unsigned long long>(program->modules[perm_idx].spv_hash));
             }
+            canonical_idx = canonical;
+            perm_hash = HashCombine(params.hash, canonical);
+        }
+    } else if (hw_stage != HwStage::Compute && reuse_stage &&
+               !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()) {
+        const auto canonical = program->StagePipelinePermutation(perm_idx);
+        if (canonical != perm_idx) {
+            static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+            if (log) {
+                std::printf("Stage content reuse: shader %016llx permutation %zu -> %zu "
+                            "(SPIR-V %016llx)\n",
+                            static_cast<unsigned long long>(params.hash), perm_idx, canonical,
+                            static_cast<unsigned long long>(program->modules[perm_idx].spv_hash));
+            }
+            canonical_idx = canonical;
             perm_hash = HashCombine(params.hash, canonical);
         }
     }
+    sel.fresh_permutation |= program->modules[canonical_idx].fresh;
     return std::make_tuple(&program->info, module,
                            ToFetchShader(program->modules[perm_idx].spec.fetch_shader_data),
                            perm_hash);

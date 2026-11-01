@@ -115,6 +115,9 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     auto [pipeline_result, pipe] =
         CreateCachedComputePipeline(device, pipeline_cache, compute_pipeline_ci, compute_key_,
                                      instance.GetPipelineBinaryGlobalKey(), binary_directory);
+    if (pipeline_result == vk::Result::ePipelineCompileRequired && g_pipeline_restore_only) {
+        return; // no stored binary: Handle() stays null (GetComputePipeline)
+    }
     ASSERT_MSG(pipeline_result == vk::Result::eSuccess, "Failed to create compute pipeline: {}",
                vk::to_string(pipeline_result));
     pipeline = std::move(pipe);

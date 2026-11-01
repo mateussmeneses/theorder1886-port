@@ -153,7 +153,8 @@ int main() {
     // 5. PartialHeightViews toggle default.
     assert(!PortToggle::Disabled(PortToggle::PartialHeightViews));
 
-    // 6. TOport point-light guard: only descriptor slots proven unread are nulled.
+    // 6. TOport point-light guard: enabled by default, only descriptor slots proven unread are nulled.
+    assert(g_point_light_guard);
     {
         const bool previous = g_point_light_guard;
         g_point_light_guard = true;

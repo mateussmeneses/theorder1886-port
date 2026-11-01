@@ -175,4 +175,23 @@ int main() {
         next.Wait();
         assert(next.Poll() == true);
     }
+    {
+        // Fair queue: a long stream of urgent tasks (> 8) yields a slot to a waiting normal task
+        // so background pipeline builds never starve completely.
+        AsyncCompiler compiler(1, 32);
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        std::vector<int> order;
+        assert(compiler.Submit([&] { entered.set_value(); gate.wait(); }));
+        entered.get_future().wait();
+        assert(compiler.Submit([&] { order.push_back(100); }, false));
+        for (int i = 1; i <= 10; ++i) {
+            assert(compiler.Submit([&, i] { order.push_back(i); }, true));
+        }
+        release.set_value();
+        compiler.Stop();
+        assert(order.size() == 11);
+        // The normal task (100) runs after the 8-task urgent burst, before urgent tasks 9 and 10.
+        assert(order[8] == 100);
+    }
 }

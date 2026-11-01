@@ -11,8 +11,8 @@ from pathlib import Path
 
 
 FRAME_STATS = re.compile(
-    r'Frame stats: ([\d.]+) FPS, worst frame ([\d.]+) ms .*?; '
-    r'(\d+) shader/pipeline compiles, ([\d.]+) ms;.*?'
+    r'(?:Frame stats: ([\d.]+) FPS|\b([\d.]+) fps\):).*?worst frame ([\d.]+) ms .*?; '
+    r'(\d+) shader/pipeline compiles(?: on the GPU thread)?, ([\d.]+) ms;.*?'
     r'(\d+) pending draws, (\d+) fallback dispatches;'
 )
 FRAME_PACING = re.compile(
@@ -148,13 +148,14 @@ def parse_log(text, seconds):
     """Extract only measurements actually printed by the current runtime."""
     frame_stats = []
     for match in FRAME_STATS.finditer(text):
+        fps_str = match.group(1) or match.group(2)
         frame_stats.append({
-            'fps': float(match.group(1)),
-            'worst_frame_ms': float(match.group(2)),
-            'pipeline_compiles': int(match.group(3)),
-            'compile_ms': float(match.group(4)),
-            'pending_draws': int(match.group(5)),
-            'fallback_dispatches': int(match.group(6)),
+            'fps': float(fps_str),
+            'worst_frame_ms': float(match.group(3)),
+            'pipeline_compiles': int(match.group(4)),
+            'compile_ms': float(match.group(5)),
+            'pending_draws': int(match.group(6)),
+            'fallback_dispatches': int(match.group(7)),
         })
     pacing = [
         {

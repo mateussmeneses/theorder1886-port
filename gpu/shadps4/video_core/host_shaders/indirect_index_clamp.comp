@@ -1,0 +1,41 @@
+// SPDX-FileCopyrightText: Copyright 2026 JulioCacko (https://github.com/JulioCacko/The-Order-1886_pc), commit 386715a1
+// SPDX-FileCopyrightText: Copyright 2026 Igor Augusto and TOport contributors (https://github.com/IgorAugustoHH/The-Order-1886-PC-Port), commit 726b0ab08a
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// port: indexed indirect draw arguments with the index count clamped to the bound index
+// buffer (vk_rasterizer.cpp, ClampIndexedIndirect).
+//
+// GCN fetches indices past INDEX_BUFFER_SIZE as 0: degenerate primitives that draw nothing.
+// Vulkan has no such bound, so a GPU-written count of 0xFFFFFFFA kept the GPU busy for minutes
+// and presentation stopped. One invocation per draw record.
+//
+// Adapted from the reference: the same dword layout and clamp, with the count already bounded
+// and a copy that leaves a valid record untouched.
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(std430, binding = 0) readonly buffer Source { uint src[]; };
+layout(std430, binding = 1) writeonly buffer Destination { uint dst[]; };
+
+// first: dword offset of the first record in Source; stride: record stride in dwords;
+// max_indices: indices the bound index buffer can supply.
+layout(push_constant) uniform Push { uint count; uint first; uint stride; uint max_indices; } push;
+
+void main() {
+    const uint index = gl_GlobalInvocationID.x;
+    if (index >= push.count) {
+        return;
+    }
+    const uint s = push.first + index * push.stride;
+    const uint d = index * 5;
+    const uint first_index = src[s + 2];
+    const uint available = push.max_indices > first_index ? push.max_indices - first_index : 0;
+    // min() only ever lowers the count: a record that already fits is copied unchanged, so the
+    // clamp cannot alter a valid draw's index range.
+    dst[d + 0] = min(src[s + 0], available);
+    dst[d + 1] = src[s + 1];
+    dst[d + 2] = first_index;
+    dst[d + 3] = src[s + 3];
+    dst[d + 4] = src[s + 4];
+}

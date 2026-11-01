@@ -68,6 +68,10 @@ enum : std::uint64_t {
     SyncBuildBudget = 1ull << 59, ///< known pipelines past 8 ms a frame build in the background
     ComputeFallback = 1ull << 60, ///< a building compute permutation runs on a near one
     PartialHeightViews = 1ull << 61, ///< reuse full-height image for partial-height integer view
+    /// Bound indexed indirect draw counts to the index buffer (GCN reads past its end as 0).
+    /// On by default in the TOport reference (726b0ab08a); scoped here to indexed indirect draws
+    /// only and leaving valid counts untouched.
+    IndexClamp = 1ull << 62,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {

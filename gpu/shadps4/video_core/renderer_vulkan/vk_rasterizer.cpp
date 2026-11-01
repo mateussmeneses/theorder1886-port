@@ -34,6 +34,9 @@
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_hle.h"
+#include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "video_core/renderer_vulkan/vk_index_clamp.h"
+#include "video_core/host_shaders/indirect_index_clamp_comp.h"
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -1477,6 +1480,17 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
                                    vk::AccessFlagBits2::eIndirectCommandRead);
     }
 
+    // port (726b0ab08a): a GPU-written index count past the bound index buffer is bounded here,
+    // before the draw reads the arguments. Placed after the producers are registered so the
+    // copy is ordered behind their writes (the tracker's ranges are submitted at the draw's
+    // ResetBindings, which runs after this).
+    vk::Buffer clamped_handle = buffer->Handle();
+    u64 clamped_offset = base;
+    if (is_indexed) {
+        std::tie(clamped_handle, clamped_offset) =
+            ClampIndexedIndirect(buffer, base, max_count, stride);
+    }
+
     if (needs_barrier) {
         runtime.FlushBarriers();
     }
@@ -1503,8 +1517,8 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         return;
     }
     const vk::Pipeline square = SquarePass(*pipeline);
-    const vk::Buffer args = buffer->Handle();
-    const u64 args_offset = base;
+    const vk::Buffer args = clamped_handle;
+    const u64 args_offset = clamped_offset;
     const vk::Buffer counts = count_address != 0 ? count_buffer->Handle() : vk::Buffer{};
     const u64 counts_offset = count_address != 0 ? count_offset : 0;
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
@@ -2294,7 +2308,195 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset, bool is_indirect) {
                                    vk::AccessFlagBits2::eIndexRead);
         index_buffer = null_buffer->Handle();
     }
-    index_bind = {index_buffer, buffer_offset, index_buffer_size, index_type};
+    index_bind = {index_buffer, buffer_offset, index_buffer_size, index_type,
+                  num_indices != 0 ? index_buffer_size / u32(index_size) : ~0u};
+}
+
+// port: adapted from JulioCacko/The-Order-1886_pc 386715a1 + 471969f7 (GPL-2.0), via
+// IgorAugustoHH/The-Order-1886-PC-Port 726b0ab08a. The Order builds indexed indirect arguments
+// on the GPU (count * 3 - 6 from a per-object record); a record with count 0 gives 0xFFFFFFFA
+// indices. GCN reads indices past INDEX_BUFFER_SIZE as 0, so those become degenerate primitives
+// that draw nothing; Vulkan has no such bound and kept the GPU busy for minutes on one draw,
+// stopping presentation. A compute pass copies the records with the count bounded, so the draw
+// ends where the hardware's visible output ends.
+//
+// Differences from the reference, deliberate:
+//   * the index bound is carried in index_bind.count, so no INDEX_BUFFER_SIZE leaves it ~0 and
+//     the draw is untouched;
+//   * planning lives in vk_index_clamp.h and is unit tested without a device;
+//   * the source range is recorded in bound_buffers like every other read, so the destination's
+//     own barrier tracking sees it (the reference calls AccessBuffer directly);
+//   * the copy is skipped when no record actually exceeds the bound, so valid draws never pay
+//     for an extra dispatch;
+//   * opt-in via THEORDER_INDEX_CLAMP=1 (the reference defaults it on): the freeze was not
+//     reproduced on CUSA00035, so the default here stays unmeasured-free;
+//   * THEORDER_INDIRECT_DIAG=1 reports anomalous counts.
+std::pair<vk::Buffer, u64> Rasterizer::ClampIndexedIndirect(const VideoCore::Buffer* args,
+                                                            u64 offset, u32 count, u32 stride) {
+    const std::pair<vk::Buffer, u64> untouched{args->Handle(), offset};
+    // Opt-in for now: the reference enables this by default, but the freeze this addresses was
+    // never reproduced on CUSA00035, so enabling it by default would ship an unmeasured code
+    // path. THEORDER_INDEX_CLAMP=1 turns it on; PortToggle::IndexClamp remains the runtime kill
+    // switch once enabled.
+    static const bool requested = [] {
+        const char* env = std::getenv("THEORDER_INDEX_CLAMP");
+        const bool on = env && env[0] == '1';
+        if (on) {
+            std::printf("Indirect index clamp: enabled (THEORDER_INDEX_CLAMP=1)\n");
+            std::fflush(stdout);
+        }
+        return on;
+    }();
+    if (!requested || PortToggle::Disabled(PortToggle::IndexClamp)) {
+        return untouched;
+    }
+    const u32 limit = index_bind.count;
+    const auto plan = IndexClamp::MakePlan(count, offset, stride, limit,
+                                           instance.StorageMinAlignment());
+    if (!plan) {
+        return untouched;
+    }
+
+    // Read the records back only when a count would run past the bound index buffer.
+    //
+    // Hazard, stated explicitly: these arguments may have been written by the GPU in an earlier
+    // submission and not yet read back, so the CPU copy can be stale. That is acceptable here
+    // because of what the answer is used for: a stale (small) count means "no clamp", which
+    // falls back to exactly the pre-patch behaviour, and a stale (large) count means "clamp",
+    // which only ever lowers an index count. Neither case can corrupt a valid draw. The copy is
+    // ordered behind the producers' writes on the GPU side through bound_buffers/runtime, so the
+    // dispatch itself reads current data even when this probe did not.
+    constexpr u64 RecordBytes = sizeof(IndexClamp::Record);
+    bool needs_clamp = false;
+    u32 clamped_records = 0;
+    for (u32 i = 0; i < count; ++i) {
+        const VAddr record_addr = args->CpuAddr() + offset + u64(i) * stride;
+        if (memory->ClampRangeSize(record_addr, RecordBytes) != RecordBytes) {
+            continue; // unmapped: reads as zero, which never exceeds the bound
+        }
+        IndexClamp::Record record{};
+        memory->CopySparseMemory(record_addr, reinterpret_cast<u8*>(&record), RecordBytes);
+        if (IndexClamp::ExceedsBound(record, limit)) {
+            needs_clamp = true;
+            ++clamped_records;
+            if (record.index_count >= IndexClamp::AnomalousCountThreshold) {
+                ++indirect_anomalies;
+            }
+        }
+    }
+    if (!needs_clamp) {
+        return untouched; // every count fits: the draw reads the original arguments
+    }
+
+    const u64 align = plan->alignment;
+    const u64 out_size = plan->out_size;
+    if (!clamped_args || out_size > clamped_args_size) {
+        if (clamped_args) {
+            // Draws already recorded may still read it: freed once the GPU passes them.
+            scheduler.DeferOperation([retired = std::move(clamped_args)] {});
+        }
+        clamped_args_size = std::max<u64>(1ull << 20, std::bit_ceil(out_size));
+        clamped_args = std::make_shared<VideoCore::Buffer>(instance, 0, clamped_args_size,
+                                                           VideoCore::MemoryType::DeviceLocal,
+                                                           "Clamped indirect args");
+        clamped_args_head = 0;
+    }
+    u64 out = Common::AlignUp(clamped_args_head, align);
+    if (out + out_size > clamped_args_size) {
+        out = 0;
+    }
+    clamped_args_head = out + out_size;
+
+    struct Pipeline {
+        vk::UniqueDescriptorSetLayout set_layout;
+        vk::UniquePipelineLayout layout;
+        vk::UniquePipeline pipeline;
+    };
+    static Pipeline pipe = [&] {
+        const auto device = instance.GetDevice();
+        Pipeline p;
+        std::array<vk::DescriptorSetLayoutBinding, 2> bindings{};
+        for (u32 i = 0; i < 2; ++i) {
+            bindings[i] = {.binding = i,
+                           .descriptorType = vk::DescriptorType::eStorageBuffer,
+                           .descriptorCount = 1,
+                           .stageFlags = vk::ShaderStageFlagBits::eCompute};
+        }
+        p.set_layout = device.createDescriptorSetLayoutUnique({
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<u32>(bindings.size()),
+            .pBindings = bindings.data(),
+        }).value;
+        const vk::PushConstantRange range{.stageFlags = vk::ShaderStageFlagBits::eCompute,
+                                          .offset = 0,
+                                          .size = 4 * sizeof(u32)};
+        p.layout = device.createPipelineLayoutUnique({
+            .setLayoutCount = 1,
+            .pSetLayouts = &*p.set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &range,
+        }).value;
+        const auto module = CompileSPV(INDIRECT_INDEX_CLAMP_COMP, device);
+        p.pipeline = device.createComputePipelineUnique(
+            {}, vk::ComputePipelineCreateInfo{
+                    .stage = {.stage = vk::ShaderStageFlagBits::eCompute,
+                              .module = module,
+                              .pName = "main"},
+                    .layout = *p.layout,
+                }).value;
+        device.destroyShaderModule(module);
+        return p;
+    }();
+
+    const u64 src_begin = plan->src_begin;
+    const u64 src_size = plan->src_size;
+    const std::array<u32, 4> push{plan->push_count, plan->push_first, plan->push_stride_dwords,
+                                  plan->push_max_indices};
+
+    scheduler.EndRendering();
+    if (runtime.IsBufferAccessed(args, src_begin, src_size)) {
+        runtime.FlushBarriers();
+    }
+    scheduler.Record([src = args->Handle(), dst = clamped_args->Handle(), src_begin, src_size, out,
+                      out_size, push](vk::CommandBuffer cmdbuf) {
+        // The previous draws reading this part of the ring come first.
+        const vk::MemoryBarrier2 reuse{.srcStageMask = vk::PipelineStageFlagBits2::eDrawIndirect,
+                                       .dstStageMask = vk::PipelineStageFlagBits2::eComputeShader};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &reuse});
+        const std::array<vk::DescriptorBufferInfo, 2> infos{{
+            {src, src_begin, src_size},
+            {dst, out, out_size},
+        }};
+        std::array<vk::WriteDescriptorSet, 2> writes{};
+        for (u32 i = 0; i < 2; ++i) {
+            writes[i] = {.dstBinding = i,
+                         .descriptorCount = 1,
+                         .descriptorType = vk::DescriptorType::eStorageBuffer,
+                         .pBufferInfo = &infos[i]};
+        }
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, *pipe.pipeline);
+        cmdbuf.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute, *pipe.layout, 0, writes);
+        cmdbuf.pushConstants(*pipe.layout, vk::ShaderStageFlagBits::eCompute, 0, sizeof(push),
+                             push.data());
+        cmdbuf.dispatch((push[0] + 63) / 64, 1, 1);
+        const vk::MemoryBarrier2 written{.srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+                                         .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+                                         .dstStageMask = vk::PipelineStageFlagBits2::eDrawIndirect,
+                                         .dstAccessMask = vk::AccessFlagBits2::eIndirectCommandRead};
+        cmdbuf.pipelineBarrier2({.memoryBarrierCount = 1, .pMemoryBarriers = &written});
+    });
+    runtime.AccessBuffer(args, src_begin, src_size, vk::PipelineStageFlagBits2::eComputeShader,
+                         vk::AccessFlagBits2::eShaderRead);
+
+    ++indirect_clamp_passes;
+    indirect_records_clamped += clamped_records;
+    static const bool diag = std::getenv("THEORDER_INDIRECT_DIAG") != nullptr;
+    if (diag) {
+        std::printf("Indirect clamp: %u records, %u past the bound, limit %u, count[0] %u\n",
+                    count, clamped_records, limit, push[0]);
+        std::fflush(stdout);
+    }
+    return {clamped_args->Handle(), out};
 }
 
 void Rasterizer::ResetBindings(bool is_compute) {

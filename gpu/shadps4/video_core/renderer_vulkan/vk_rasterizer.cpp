@@ -2380,7 +2380,7 @@ std::pair<vk::Buffer, u64> Rasterizer::ClampIndexedIndirect(const VideoCore::Buf
             needs_clamp = true;
             ++clamped_records;
             if (record.index_count >= IndexClamp::AnomalousCountThreshold) {
-                ++indirect_anomalies;
+                ++PortStats::indirect_anomalies;
             }
         }
     }
@@ -2488,8 +2488,8 @@ std::pair<vk::Buffer, u64> Rasterizer::ClampIndexedIndirect(const VideoCore::Buf
     runtime.AccessBuffer(args, src_begin, src_size, vk::PipelineStageFlagBits2::eComputeShader,
                          vk::AccessFlagBits2::eShaderRead);
 
-    ++indirect_clamp_passes;
-    indirect_records_clamped += clamped_records;
+    ++PortStats::indirect_clamp_passes;
+    PortStats::indirect_records_clamped += clamped_records;
     static const bool diag = std::getenv("THEORDER_INDIRECT_DIAG") != nullptr;
     if (diag) {
         std::printf("Indirect clamp: %u records, %u past the bound, limit %u, count[0] %u\n",

@@ -480,13 +480,10 @@ private:
     } index_bind{};
     /// port: indexed indirect arguments with clamped index counts (ClampIndexedIndirect), a ring
     /// of device-local memory reused across draws; the old ring is freed once the GPU passes it.
+    /// The counters for it live in PortStats (port_toggles.h) so the Frame stats line reports them.
     std::shared_ptr<VideoCore::Buffer> clamped_args;
     u64 clamped_args_size = 0;
     u64 clamped_args_head = 0;
-    /// port: diagnostics for anomalous indirect draws (THEORDER_INDIRECT_DIAG=1).
-    u64 indirect_clamp_passes = 0;
-    u64 indirect_records_clamped = 0;
-    u64 indirect_anomalies = 0;
     /// The direct draw whose vertex/index buffers BindResources may resolve early.
     struct DrawInputs {
         const GraphicsPipeline* pipeline;

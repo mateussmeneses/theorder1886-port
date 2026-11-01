@@ -564,6 +564,12 @@ void VideoOutDriver::Flip(const Request& req) {
             const u32 pending_draws = Vulkan::g_port_pending_draws.exchange(0);
             const u64 direct = Vulkan::Scheduler::direct_recordings.exchange(0);
             const u64 faults = PortStats::tracker_faults.exchange(0);
+            // Indirect clamp: 0 passes with the feature enabled and 0 anomalies is a real result
+            // (the pathological counts never appeared), not missing data; with the feature off
+            // both stay 0 and the line below is skipped.
+            const u64 clamp_passes = PortStats::indirect_clamp_passes.exchange(0);
+            const u64 clamp_records = PortStats::indirect_records_clamped.exchange(0);
+            const u64 clamp_anomalies = PortStats::indirect_anomalies.exchange(0);
             // GPU command thread CPU time per draw: comparable between builds even when the scene
             // (and so the frame rate) differs a little.
             static u64 window_draws = 0, window_gpu_us = 0;
@@ -610,6 +616,12 @@ void VideoOutDriver::Flip(const Request& req) {
                         PortStats::tick_wait_ns.exchange(0) / (window * 1e7),
                         frames ? double(PortStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(PortStats::scene_draws.exchange(0)) / frames : 0.0);
+            if (clamp_passes || clamp_records || clamp_anomalies) {
+                std::printf("Indirect clamp: %llu passes, %llu records clamped, %llu anomalous\n",
+                            static_cast<unsigned long long>(clamp_passes),
+                            static_cast<unsigned long long>(clamp_records),
+                            static_cast<unsigned long long>(clamp_anomalies));
+            }
             presenter->GetRasterizer().GetPipelineCache().ReportCompilerStats();
             Vulkan::WaitDiagnostics::Report();
             trace.Flush();

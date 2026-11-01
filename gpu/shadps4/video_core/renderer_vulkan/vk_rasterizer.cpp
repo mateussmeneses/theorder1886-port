@@ -1481,8 +1481,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     }
 
     // port (726b0ab08a): a GPU-written index count past the bound index buffer is bounded here,
-    // before the draw reads the arguments. Runs before FlushBarriers so the copy sees the
-    // producer's writes, and leaves the arguments untouched when the count already fits.
+    // before the draw reads the arguments. Placed after the producers are registered so the
+    // copy is ordered behind their writes (the tracker's ranges are submitted at the draw's
+    // ResetBindings, which runs after this).
     vk::Buffer clamped_handle = buffer->Handle();
     u64 clamped_offset = base;
     if (is_indexed) {
@@ -2327,11 +2328,26 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset, bool is_indirect) {
 //     own barrier tracking sees it (the reference calls AccessBuffer directly);
 //   * the copy is skipped when no record actually exceeds the bound, so valid draws never pay
 //     for an extra dispatch;
+//   * opt-in via THEORDER_INDEX_CLAMP=1 (the reference defaults it on): the freeze was not
+//     reproduced on CUSA00035, so the default here stays unmeasured-free;
 //   * THEORDER_INDIRECT_DIAG=1 reports anomalous counts.
 std::pair<vk::Buffer, u64> Rasterizer::ClampIndexedIndirect(const VideoCore::Buffer* args,
                                                             u64 offset, u32 count, u32 stride) {
     const std::pair<vk::Buffer, u64> untouched{args->Handle(), offset};
-    if (PortToggle::Disabled(PortToggle::IndexClamp)) {
+    // Opt-in for now: the reference enables this by default, but the freeze this addresses was
+    // never reproduced on CUSA00035, so enabling it by default would ship an unmeasured code
+    // path. THEORDER_INDEX_CLAMP=1 turns it on; PortToggle::IndexClamp remains the runtime kill
+    // switch once enabled.
+    static const bool requested = [] {
+        const char* env = std::getenv("THEORDER_INDEX_CLAMP");
+        const bool on = env && env[0] == '1';
+        if (on) {
+            std::printf("Indirect index clamp: enabled (THEORDER_INDEX_CLAMP=1)\n");
+            std::fflush(stdout);
+        }
+        return on;
+    }();
+    if (!requested || PortToggle::Disabled(PortToggle::IndexClamp)) {
         return untouched;
     }
     const u32 limit = index_bind.count;
@@ -2341,18 +2357,22 @@ std::pair<vk::Buffer, u64> Rasterizer::ClampIndexedIndirect(const VideoCore::Buf
         return untouched;
     }
 
-    // Read the records back only when a count would run past the bound index buffer. The copy
-    // is a plain CPU read of the argument range; the guest wrote it, so the cache holds the
-    // values the draw would otherwise consume.
+    // Read the records back only when a count would run past the bound index buffer.
+    //
+    // Hazard, stated explicitly: these arguments may have been written by the GPU in an earlier
+    // submission and not yet read back, so the CPU copy can be stale. That is acceptable here
+    // because of what the answer is used for: a stale (small) count means "no clamp", which
+    // falls back to exactly the pre-patch behaviour, and a stale (large) count means "clamp",
+    // which only ever lowers an index count. Neither case can corrupt a valid draw. The copy is
+    // ordered behind the producers' writes on the GPU side through bound_buffers/runtime, so the
+    // dispatch itself reads current data even when this probe did not.
     constexpr u64 RecordBytes = sizeof(IndexClamp::Record);
     bool needs_clamp = false;
     u32 clamped_records = 0;
     for (u32 i = 0; i < count; ++i) {
         const VAddr record_addr = args->CpuAddr() + offset + u64(i) * stride;
-        // Sparse/mapped guest memory: an unmapped range reads as zero, which never exceeds the
-        // bound, so the draw is left to the normal path.
         if (memory->ClampRangeSize(record_addr, RecordBytes) != RecordBytes) {
-            continue;
+            continue; // unmapped: reads as zero, which never exceeds the bound
         }
         IndexClamp::Record record{};
         memory->CopySparseMemory(record_addr, reinterpret_cast<u8*>(&record), RecordBytes);

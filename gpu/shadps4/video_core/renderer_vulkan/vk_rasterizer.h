@@ -17,6 +17,7 @@
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#include <unordered_set>
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace AmdGpu {
@@ -510,6 +511,7 @@ private:
     } texture_task;
     /// Draws whose textures the helper bound completely, partly or not at all (THEORDER_FRAME_STATS).
     u64 helper_full = 0, helper_partial = 0, helper_serial = 0;
+    std::unordered_set<VAddr> uncompressed_htiles;
     /// The memoized cache entry of each image binding (FindImage memo taken), else null.
     boost::container::static_vector<ImageDescCacheEntry*, Shader::NUM_IMAGES> image_binding_entries;
     bool attachment_feedback_loop{};

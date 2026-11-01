@@ -99,6 +99,11 @@ inline std::atomic<std::uint64_t> obtain_hits{0}, obtain_misses{0};
 inline std::atomic<std::uint64_t> t_resident{0}, t_protect{0}, t_image_create{0}, t_refresh{0},
     t_staging{0}, t_host_wait{0}, t_copy{0}, copy_bytes{0}, t_read_faults{0}, read_faults{0},
     t_write_faults{0}, t_copy_cpu{0}, copy_sys_us{0}, copy_minflt{0}, t_gc{0}, t_readback_wait{0};
+/// Indirect index clamp (vk_rasterizer.cpp): passes that rewrote a batch's argument buffer, records
+/// whose count ran past the bound, and records whose count was large enough to look anomalous.
+/// Counters exist so "the clamp never fired" is distinguishable from "the clamp is off".
+inline std::atomic<std::uint64_t> indirect_clamp_passes{0}, indirect_records_clamped{0},
+    indirect_anomalies{0};
 /// Diagnostics are collected only with THEORDER_FRAME_STATS=1.
 inline const bool enabled = [] {
     const char* env = std::getenv("THEORDER_FRAME_STATS");

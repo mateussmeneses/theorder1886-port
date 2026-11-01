@@ -12,7 +12,7 @@ Both projects use shadPS4-derived Vulkan and a native x86-64 runtime. They have 
 | Particle/point-light descriptor guard (TOport v0.1.5, shader `0x804aeead`) | Specific guard absent; destination has broad stale T# filtering and measured many new shader variants | Stage 1: implement opt-in; verify CUSA00035 |
 | Driver pipeline cache and recent-pipeline warm-up | Present in destination, with persistence and visible-pipeline priority | Measure separately; do not import conflicting cache manager |
 | Async compute compilation | Present with safety policy: one-shot image-writing dispatches must not be skipped | Preserve policy; do not copy reference's global default of async compute |
-| Indirect indexed draw count clamp, from JulioCacko (TOport v0.1.4) | Reference implementation not present by that name | Stage 2: inspect and adapt with bounds/barriers tests |
+| Indirect indexed draw count clamp, from JulioCacko (TOport v0.1.4) | Adapted opt-in (PR #105, `a008eb9`); device-verified (PR #106) | Gameplay A/B on CUSA00035 outstanding; stays opt-in until the freeze reproduces |
 | Compile pressure budget / fair queues | Both have custom compiler queue/worker policies | Stage 3: reproduce workload and evaluate admission-control vs actual driver wait |
 | TAA/FSR/DLSS, render resolution, motion vectors | Diverged and contain independent modifications | Stage 4: visual compare; integrate only causal fixes |
 | GPU memory/cache/readback accounting | Diverged; destination already has its own fixes | Stage 5: profile; avoid wholesale replacement |
@@ -50,7 +50,17 @@ python run.py
 
 ## Follow-up stages (each in an independent PR)
 
-**Stage 2 — indexed-indirect clamp.** Compare TOport's `gpu/shadps4/video_core/host_shaders/indirect_index_clamp.comp`, `vk_rasterizer.cpp/.h`, and shader CMake registration at [commit 726b0ab](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/726b0ab08a). Adapt indexed buffer bounds, command argument stride/count, buffer upload and Vulkan barriers to the destination. Leave an opt-in toggle first and test zero counts, overflow, bounds and visual equivalence; do **not** overwrite the destination rasterizer.
+**Stage 2 — indexed-indirect clamp (delivered).** Adapted from TOport's `indirect_index_clamp.comp`, `vk_rasterizer.cpp/.h` and the shader CMake registration at [commit 726b0ab](https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/726b0ab08a) in PR #105 (`a008eb9`), without replacing the destination rasterizer.
+
+Deliberate differences from the reference, recorded at the call site:
+- the CPU probe that decides *whether* to clamp reuses the destination's `ClampRangeSize`/`CopySparseMemory`; the reference reads the arguments directly;
+- the copy is ordered through the destination's own barrier tracker (`runtime.IsBufferAccessed` / `AccessBuffer`) instead of a direct `AccessBuffer` call, so the existing tracking stays authoritative;
+- the reference enables the path unconditionally; here it is opt-in behind `THEORDER_INDEX_CLAMP=1` with `PortToggle::IndexClamp` as a runtime kill switch, because the freeze it targets has not been reproduced on CUSA00035;
+- `max_indices == 0` (no `INDEX_BUFFER_SIZE` reported) never clamps: the port does not invent a bound.
+
+Testing: `indirect-index-clamp-test` covers zero counts, exact-bound, overflow (`0xFFFFFFFF`), the reported `0xFFFFFFFA`, `firstIndex` past the bound, a zero bound and multi-record batches. `indirect-index-clamp-gpu-test` (PR #106) runs the production shader on a real device and proves a valid draw's five argument dwords survive byte-for-byte, with the output buffer pre-poisoned so an unwritten field cannot pass silently.
+
+**Still not verified:** gameplay. The freeze has not been observed on CUSA00035, so the A/B against `THEORDER_INDEX_CLAMP=0` remains outstanding and the feature stays off by default. Do not cite this stage as a fixed stutter without that evidence.
 
 **Stage 3 — compiler fairness, memory pressure, preloading.** Audit the reference `bb_compile_budget.{h,cpp}`, `bb_compile_queue.h`, `vk_pipeline_cache.cpp` against the destination's queue priority, per-key driver builds, driver cache, warm-up list and worker pool. Change only one admission-control or caching choice per A/B. Preserve essential visible draws and once-only compute writes.
 

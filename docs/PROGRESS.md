@@ -1202,6 +1202,18 @@ FPS run); the intro holds 60, the 3D prologue 45-58 FPS: the GPU thread is 77-93
 9. Diagnostics: `Stall:` lines split compile time (translate / SPIR-V / driver); a GFX
    `WaitRegMem` unmet for 2 s is reported; `THEORDER_PERMUTATION_LOG=1` explains new permutations.
 
+**Implemented and device-verified**
+- Indirect index clamp (`PortToggle::IndexClamp`, opt-in via `THEORDER_INDEX_CLAMP=1`): a compute
+  pass rewrites `VkDrawIndexedIndirectCommand::index_count` to `max_indices - first_index` when a
+  record exceeds the bound, leaving valid records byte-identical. `THEORDER_INDIRECT_DIAG=1` reports
+  anomalous counts. `indirect-index-clamp-test` covers the planning arithmetic;
+  `indirect-index-clamp-gpu-test` runs the production `indirect_index_clamp.comp` on a real device
+  and reads the output back: a valid batch (including a record ending exactly at the bound) is
+  unchanged, an oversized count is clamped while instance_count/first_index/vertex_offset/
+  first_instance survive, the reported `0xFFFFFFFA` case clamps to the bound, `firstIndex` past the
+  bound yields a zero count, and a mixed batch leaves the valid record alone. Not yet exercised in
+  gameplay: the freeze it targets has not been reproduced on CUSA00035, so the clamp stays opt-in.
+
 **Implemented, not yet run**
 - Asynchronous compute pipeline creation (`AsyncComputeCompilation`, `vk_pipeline_cache.cpp`):
   ~95% of the remaining stutter is the driver compiling new permutations of `0x804aeead`

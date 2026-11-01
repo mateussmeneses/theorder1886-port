@@ -1707,6 +1707,7 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     }
 
     ResetBindings(true);
+    if (cs.pgm_hash == 0x7b1b18c9) buffer_cache.RecordSunCopies();
     scheduler.KickRecording();
 }
 
@@ -2762,6 +2763,11 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if (desc.is_written &&
+                (stage.uses_buffer_atomic_float_min_max || stage.pgm_hash == 0x7550d841 ||
+                 stage.pgm_hash == 0x7b1b18c9)) {
+                buffer_cache.KeepPageSynchronized(vsharp.base_address, vsharp.GetSize(), stage.pgm_hash);
+            }
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
@@ -3262,6 +3268,17 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
                         Regs().ta_bc_base.Address());
             ssharp = AmdGpu::Sampler{};
         }
+        // The Order's UI drawn scaled into the upscaled output (1440p: 1.33x): its
+        // point-sampled sprites (button icons) repeated uneven texel rows; bilinear keeps them
+        // smooth. 1:1 offscreen UI passes sample texel centres, unchanged either way.
+        if (upscaler->OrderUiPhase() && !sampler.is_depth) {
+            if (ssharp.xy_mag_filter == AmdGpu::Filter::Point) {
+                ssharp.xy_mag_filter.Assign(AmdGpu::Filter::Bilinear);
+            }
+            if (ssharp.xy_min_filter == AmdGpu::Filter::Point) {
+                ssharp.xy_min_filter.Assign(AmdGpu::Filter::Bilinear);
+            }
+        }
         const auto vk_sampler = texture_cache.GetSampler(
             ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
@@ -3522,7 +3539,18 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         }
         std::printf("Scene pass: reduced %d %s\n", reduced, why.c_str());
     }
-    push_data.scene_size = reduced ? SceneResolution::Pack(scene_targets->Size()) : 0;
+    // The shaders turn reduced FragCoord back into guest pixels as value * 1920x1080 / scene
+    // (emit_spirv_context_get_set.cpp). Express the reduced size against 1920x1080 so the factor
+    // is game / scene for other game sizes too (the retail 1920x800 scene: 800/534, not 1080/534).
+    if (reduced) {
+        const auto scene = scene_targets->Size();
+        const auto game = SceneResolution::GameSize();
+        push_data.scene_size = SceneResolution::Pack(
+            {u32(std::lround(double(scene.width) * 1920.0 / game.width)),
+             u32(std::lround(double(scene.height) * 1080.0 / game.height))});
+    } else {
+        push_data.scene_size = 0;
+    }
     if (PortStats::enabled) {
         PortStats::reduced_draws.fetch_add(reduced, std::memory_order_relaxed);
         PortStats::scene_draws.fetch_add(scene_started, std::memory_order_relaxed);
@@ -3686,6 +3714,31 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         const bool is_stencil_clear = regs.depth_render_control.stencil_clear_enable;
         texture_cache.TouchMeta(htile_address, slice, false);
         ASSERT(desc.view_info.range.extent.levels == 1 && !image.binding.needs_rebind);
+        static const bool htile_draw_expand = [] {
+            const char* env = std::getenv("THEORDER_HTILE_DRAW_EXPAND");
+            if (!env) env = std::getenv("BB_HTILE_DRAW_EXPAND");
+            return !env || env[0] != '0';
+        }();
+        if (htile_draw_expand && htile_address && regs.depth_control.depth_enable &&
+            regs.depth_control.depth_write_enable &&
+            (is_depth_clear || !uncompressed_htiles.contains(htile_address))) {
+            const auto& info = image.info;
+            const u32 tiles_x = Common::AlignUp((info.size.width + 7) / 8, 64u);
+            const u32 tiles_y = Common::AlignUp((info.size.height + 7) / 8, 64u);
+            const u64 size = memory->ClampRangeSize(
+                htile_address, u64(tiles_x) * tiles_y * 4 * std::max<u32>(info.resources.layers, 1u));
+            if (size) {
+                static constexpr u32 ZmaskUncompressed = 0xf;
+                const auto [buffer, offset] =
+                    buffer_cache.ObtainBuffer(htile_address, static_cast<u32>(size),
+                                              VideoCore::ObtainBufferFlags::IsWritten);
+                runtime.FillBuffer(buffer, offset, size, ZmaskUncompressed);
+                if (uncompressed_htiles.insert(htile_address).second) {
+                    std::printf("HTILE: %#llx marked uncompressed, %llu bytes\n",
+                                (unsigned long long)htile_address, (unsigned long long)size);
+                }
+            }
+        }
 
         const bool has_stencil = image.info.props.has_stencil;
         // Stencil writes can be enabled while depth writes are off.
@@ -4276,21 +4329,14 @@ void Rasterizer::UpdateDepthStencilState() const {
     }
 
     const auto depth_bias_enabled = regs.polygon_control.NeedsBias();
-    // Adapted from TOport / Igor Augusto's redraw-depth-bias experiment:
-    // https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/fff668c
-    // THEORDER_REDRAW_DEPTH_BIAS=<units> (default 128.0f): universal facial & character redraw depth bias.
-    // A pass that redraws the same mesh over an earlier pass (depth test LessEqual, no depth
-    // write, no bias of its own) relies on bit-identical positions; on PC GPUs floating-point
-    // rounding can differ at single pixels (dark dots/speckles on faces). Biasing by 128 units
-    // completely eliminates facial dots while leaving GreaterEqual passes (light volumes) alone.
-    static const float redraw_bias = [] {
-        const char* env = std::getenv("THEORDER_REDRAW_DEPTH_BIAS");
-        if (!env) env = std::getenv("BB_REDRAW_DEPTH_BIAS");
-        if (env) {
-            return float(std::atof(env));
-        }
-        return 128.0f;
-    }();
+    // Redraw depth bias: in TOport commit e825344, applying a universal 128.0f depth bias
+    // to all non-writing LessEqual draws was reverted because it caused black tears/streaks
+    // across general scene geometry. BbFaceDepth (gpu/shim/bb_face_depth_fix.cpp) handles
+    // specific character facial passes cleanly without biasing arbitrary scene meshes.
+    // THEORDER_REDRAW_DEPTH_BIAS=<units> (default 0.0f): preserved for isolated A/B testing.
+    static const float redraw_bias = Vulkan::ParseRedrawDepthBias(
+        std::getenv("THEORDER_REDRAW_DEPTH_BIAS"),
+        std::getenv("BB_REDRAW_DEPTH_BIAS"));
     const AmdGpu::CompareFunc depth_func = regs.depth_control.depth_func;
     const bool redraw = redraw_bias > 0.0f && depth_test_enabled && !depth_bias_enabled &&
                         !regs.depth_control.depth_write_enable &&

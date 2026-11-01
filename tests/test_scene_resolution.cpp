@@ -208,6 +208,9 @@ int main() {
         std::memcpy(&result, ai.pMappedData, 4);
         assert(result == 0xff00ff00);
     }
+    // Validate GameSize retail default and aspect ratio calculation
+    assert((SceneResolution::GameSize() == SceneResolution::Size{1920, 800}));
+    assert(SceneResolution::Unpack(SceneResolution::Pack({1920, 800})) == (SceneResolution::Size{1920, 800}));
     std::puts("Scene targets: half-resolution mip level proxy roundtrip PASS");
     scheduler.Finish();
     vmaDestroyBuffer(instance.GetAllocator(),readback,allocation);

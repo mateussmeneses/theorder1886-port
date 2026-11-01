@@ -900,8 +900,10 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // When creating a depth buffer through overlap resolution don't clear it on first use.
         new_image.info.meta_info.htile_clear_mask = 0;
         if (!runtime.CopyColorAndDepth(&cache_image, &new_image)) {
-            new_image.flags |= ImageFlagBits::Dirty;
-            return new_image_id;
+            // A missing transfer is not a successful cache conversion. Keep the
+            // only GPU copy of the old contents; let normal overlap handling retry.
+            FreeImage(new_image_id);
+            return {};
         }
 
         // Free the cache image.

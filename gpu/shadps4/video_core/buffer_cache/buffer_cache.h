@@ -21,6 +21,7 @@
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
+#include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/texture_cache/image.h"
 
 namespace AmdGpu {
@@ -111,6 +112,11 @@ public:
     void ExtendWriteFault(VAddr device_addr);
     /// Unmark a region as modified from the GPU.
     void UnmarkRegionAsGpuModified(VAddr device_addr, u64 size, bool is_write = false);
+
+    /// Port: CPU writes to the pages of these ranges are synchronized immediately (THEORDER_SUN_READBACK_SYNC=0: off).
+    void KeepPageSynchronized(VAddr device_addr, u64 size, u64 pgm_hash);
+    /// Copies the registered ranges to host memory; a CPU write to their pages gets the newest completed copy.
+    void RecordSunCopies();
 
     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
     void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool async = false,
@@ -236,6 +242,22 @@ private:
     std::mutex gpu_ranges_mutex;
     /// port: whether [device_addr, device_addr + size) holds bytes a GPU binding wrote.
     bool TouchesGpuBytes(VAddr device_addr, u64 size);
+
+    bool SynchronizedPage(VAddr addr, u64 size);
+    std::mutex synchronized_mutex;
+    RangeSet synchronized_ranges;
+    bool DeliverSunCopies();
+    struct SunCopy {
+        VAddr addr;
+        u64 size;
+        u64 staging_offset;
+    };
+    struct SunBatch {
+        u64 tick{};
+        Vulkan::StagingBufferRef staging{};
+        std::vector<SunCopy> items;
+    };
+    std::deque<SunBatch> sun_batches;
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;

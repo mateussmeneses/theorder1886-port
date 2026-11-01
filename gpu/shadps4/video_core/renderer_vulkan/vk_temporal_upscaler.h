@@ -46,6 +46,10 @@ public:
                      CameraMotion& camera_motion, SceneTargets& scene_targets);
     ~TemporalUpscaler();
 
+    [[nodiscard]] bool OrderUiPhase() const noexcept {
+        return Enabled() && ui_phase;
+    }
+
     [[nodiscard]] bool Enabled() const noexcept {
         return enabled;
     }

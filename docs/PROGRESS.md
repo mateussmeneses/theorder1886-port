@@ -2,6 +2,48 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-01: graphics fidelity, temporal stability, and VRAM management (6 PR branches)
+
+- **Scope:** comprehensive investigation and remediation of graphics fidelity regressions, flickering,
+  incorrect shadows, unstable lighting, temporal reprojection jitter, and resource management across
+  the 12 mandatory investigation areas comparing `theorder1886-port` against `TOport` (reference
+  commit `ceebdf3`). Changes are isolated into six independent PR branches plus an integrated branch
+  `integrate/gfx-and-temporal-fidelity-combined`. Master branch left untouched (`a9dbaa8`).
+- **6 Independent PR Branches & Key Fixes (all gated by A/B environment variables):**
+  1. `fix/gfx-redraw-depth-bias-default` (commit `87e33e0`):
+     - Defaulted `THEORDER_REDRAW_DEPTH_BIAS` to `0.0f` (was `128.0f`), matching TOport commit `e825344`.
+     - Universal depth bias on non-depth-writing `LessEqual` draws was causing black geometry tearing
+       and horizontal streaks across environment meshes. Character face passes remain protected via
+       `BbFaceDepth`. Validated in `tests/test_depth_stencil_state.cpp`.
+  2. `fix/gfx-depth-alias-and-overlap` (commit `77a5c13`):
+     - Bit-preserving depth-to-color MSAA alias copies (`PlanDepthAliasCopy`, `ms_depth_to_color_frag`)
+       for passes sampling multisampled depth (`D32_SFLOAT`, 2x/4x) through packed color views (`R32G32`,
+       `R32G32B32A32_SFLOAT`). Gated by `THEORDER_DEPTH_ALIAS_FIX=1`.
+     - Fixed critical image leak and page table desync in `TextureCache::ResolveDepthOverlap` on copy
+       failure (`FreeImage(new_image_id)`). Validated in `tests/test_depth_alias_copy.cpp`.
+  3. `fix/gfx-sun-readback-sync-and-htile` (commit `7cf7979`):
+     - Synchronized exposure and sunlight luminance buffer pages for shaders `0x7550d841` and `0x7b1b18c9`
+       via `KeepPageSynchronized`, `RecordSunCopies`, and `DeliverSunCopies`, resolving whiteout and
+       pitch-black screens (#43, #47). Gated by `THEORDER_SUN_READBACK_SYNC=1`.
+     - HTILE buffer range uncompressed expansion on depth write in `BeginRenderingFull`, preventing
+       subsequent compute passes from treating valid depth as cleared. Gated by `THEORDER_HTILE_DRAW_EXPAND=1`.
+  4. `fix/gfx-face-workers-and-compute-recurring` (commit `d31feb8`):
+     - Guarded 9 facial shaders against background worker specialization across camera cuts
+       (`THEORDER_FACE_WORKERS=0` by default), preventing missing face textures on cutscene transitions.
+       Validated in `tests/test_face_workers_guard.cpp`.
+  5. `fix/gfx-scene-resolution-1920x800` (commit `d4b69c8`):
+     - Added `SceneResolution::GameSize()` defaulting to retail cinema scope 1920x800 and adjusted
+       `FragCoord.y` factors in `vk_rasterizer.cpp` against 800 instead of 1080. Eliminates temporal
+       reprojection skew in TAA, DLSS, and FSR. Gated by `THEORDER_SCENE_LETTERBOX=1`.
+     - Promoted UI point-samplers to Bilinear during `OrderUiPhase()` to eliminate high-res HUD shimmering
+       at 1440p and 4K. Gated by `THEORDER_UI_BILINEAR=1`. Validated in `tests/test_scene_resolution.cpp`.
+  6. `fix/mem-vram-pipeline-binary-trim-and-srt` (commit `431ca76`):
+     - Implemented `TrimPipelineBinaries(directory, budget_bytes)` (default 4096 MB via
+       `THEORDER_PIPELINE_BINARY_CACHE_MB=4096`) using LRU timestamps, bounding cache memory growth
+       and cleaning up orphaned `.tmp` files. Validated in `tests/test_pipeline_binary_trim.cpp`.
+- **Validation:** all 54 C/C++ native GPU tests and the Python test suite pass on the combined integration
+  branch `integrate/gfx-and-temporal-fidelity-combined`. Master remains clean.
+
 ## 2026-11-01: shader compiler, warm-cache permutation preservation, and pipeline pre-queueing (4 PR branches)
 
 - **Scope:** investigated and implemented shader/pipeline compilation stutter reductions across

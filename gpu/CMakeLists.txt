@@ -88,6 +88,19 @@ set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
 
+# port: FSR 1.1.4 predates libc++'s stricter transitive includes. Under MSYS2 CLANG64 these five
+# translation units use std::mutex, log2, placement new, _countof and swprintf_s without including
+# the header that declares them; libstdc++ happened to pull them in, libc++ does not, so a fresh
+# clone fails with "no member named 'lock_guard' in namespace 'std'". Forcing the headers keeps the
+# fix in this repository instead of in uncommitted edits inside the (third-party) submodule.
+set(THEORDER_FFX_LIBCXX_HEADERS --include=mutex --include=cmath --include=new --include=cstdlib
+    --include=wchar.h)
+foreach(ffx_target ffx_vulkan_fsr3_host_1_1_4 ffx_vulkan_fsr3_vk_backend_1_1_4)
+    if (TARGET ${ffx_target})
+        target_compile_options(${ffx_target} PRIVATE ${THEORDER_FFX_LIBCXX_HEADERS})
+    endif()
+endforeach()
+
 # Host shaders -> headers (same scheme as shadPS4's host_shaders/CMakeLists.txt).
 set(SHADER_SRC ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/host_shaders)
 set(SHADER_INCLUDE ${CMAKE_CURRENT_BINARY_DIR}/include)

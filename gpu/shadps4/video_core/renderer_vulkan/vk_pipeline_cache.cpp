@@ -13,6 +13,7 @@
 #include "port_threads.h"
 
 #include "common/hash.h"
+#include "common/scope_exit.h"
 #include "common/thread.h"
 #include "common/io_file.h"
 #include "common/elf_info.h"
@@ -26,6 +27,7 @@
 #include "shader_recompiler/runtime_info.h"
 #include "port_settings.h"
 #include "video_core/amdgpu/liverpool.h"
+#include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
@@ -868,6 +870,12 @@ bool PipelineCache::QueueShader(Program& program, HwStage stage, SwStage l_stage
                   permutation, capture_job.Error());
         return false;
     }
+    if (initial) {
+        std::unique_lock lock{programs_mutex};
+        program.info = build->info;
+        program.info.user_data = {};
+        program.info_template = std::make_unique<Shader::Info>(program.info);
+    }
     const bool queued = build->job.Start(*compiler, [this, build] {
         PhaseTimer compile{g_port_async_ns};
         Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch};
@@ -877,73 +885,121 @@ bool PipelineCache::QueueShader(Program& program, HwStage stage, SwStage l_stage
         DumpShader(spv, build->info.pgm_hash, build->info.hw_stage, build->permutation, "spv");
         auto patch = GetShaderPatch(build->info.pgm_hash, build->info.hw_stage,
                                     build->permutation, "spv");
-        build->module = CompileSPV(patch && EmulatorSettings.IsPatchShaders() ? *patch : spv,
-                                    instance.GetDevice());
+        const bool is_patched = patch && EmulatorSettings.IsPatchShaders();
+        build->module = CompileSPV(is_patched ? *patch : spv, instance.GetDevice());
+        if (build->info.sw_stage == SwStage::Vertex) {
+            BbFaceDepth::Register(build->module,
+                                  is_patched ? std::span<const u32>(*patch)
+                                             : std::span<const u32>(spv),
+                                  build->info.pgm_hash);
+        }
         build->binary = std::move(spv);
         build->ir.reset();
         compiler_pools.Recycle(std::move(build->pools));
         return build;
     }, true);
     if (queued) {
-        program.pending = std::move(build);
-        pending_programs.push_back(&program);
+        static const bool multi_perm = [] {
+            const char* env = std::getenv("THEORDER_MULTI_PERMUTATION_QUEUE");
+            return !env || env[0] != '0';
+        }();
+        if (multi_perm) {
+            std::unique_lock lock{programs_mutex};
+            auto reserved_spec = build->spec;
+            reserved_spec.info = &program.info;
+            program.InsertPermut(vk::ShaderModule{}, std::move(reserved_spec), permutation, 0);
+            program.modules[permutation].fresh = true;
+            program.modules[permutation].pending_compile = true;
+        }
+        if (!program.pending) {
+            program.pending = build;
+        }
+        program.pending_builds.push_back(std::move(build));
+        if (std::ranges::find(pending_programs, &program) == pending_programs.end()) {
+            pending_programs.push_back(&program);
+        }
     }
     return queued;
 }
 
 void PipelineCache::PublishShaders(bool wait) {
+    bool published_any = false;
     for (size_t i = 0; i < pending_programs.size();) {
         auto* program = pending_programs[i];
         const auto hash = program->info.pgm_hash;
-        const auto retire = [&] {
+        for (size_t b = 0; b < program->pending_builds.size();) {
+            auto build = program->pending_builds[b];
+            if (wait) {
+                build->job.Wait();
+            }
+            auto result = build->job.Poll();
+            if (!result) {
+                if (build->job.Failed()) {
+                    {
+                        std::unique_lock lock{programs_mutex};
+                        if (build->initial) {
+                            program->compilation_failed = true;
+                        } else {
+                            build->spec.info = &program->info;
+                            program->failed_permutations.push_back(std::move(build->spec));
+                        }
+                        if (build->permutation < program->modules.size() &&
+                            program->modules[build->permutation].pending_compile) {
+                            program->modules[build->permutation].pending_compile = false;
+                            program->modules[build->permutation].spec = {};
+                        }
+                    }
+                    LOG_ERROR(Render_Vulkan, "port: shader {:#x}/{} compilation failed: {}", hash,
+                              build->permutation, build->job.Error());
+                    program->pending_builds.erase(program->pending_builds.begin() + b);
+                } else {
+                    ++b;
+                }
+                continue;
+            }
+            const auto perm_hash = HashCombine(hash, build->permutation);
+            Vulkan::SetObjectName(instance.GetDevice(), build->module,
+                                  GetShaderName(build->info.hw_stage, hash, build->permutation));
+            const u64 spv_hash =
+                RegisterShaderBinary(std::move(build->binary), hash, build->permutation);
+            {
+                std::unique_lock lock{programs_mutex};
+                if (build->initial && !program->info_template) {
+                    program->info = std::move(build->info);
+                    program->info.user_data = {};
+                    program->info_template = std::make_unique<Shader::Info>(program->info);
+                }
+                build->spec.info = &program->info;
+                RegisterShaderMeta(program->info, build->spec.fetch_shader_data, build->spec,
+                                   perm_hash, build->permutation, spv_hash,
+                                   profile.needs_ssbo_store_load_barrier);
+                program->InsertPermut(build->module, std::move(build->spec), build->permutation,
+                                      spv_hash);
+                program->modules[build->permutation].fresh = true;
+                program->modules[build->permutation].pending_compile = false;
+                build->module = nullptr;
+            }
+            program->pending_builds.erase(program->pending_builds.begin() + b);
+            published_any = true;
+        }
+        program->pending =
+            program->pending_builds.empty() ? nullptr : program->pending_builds.front();
+        if (program->pending_builds.empty()) {
             pending_programs[i] = pending_programs.back();
             pending_programs.pop_back();
-        };
-        auto build = program->pending;
-        if (wait) {
-            build->job.Wait();
+        } else {
+            ++i;
         }
-        auto result = build->job.Poll();
-        if (!result) {
-            if (build->job.Failed()) {
-                if (build->initial) {
-                    program->compilation_failed = true;
-                } else {
-                    build->spec.info = &program->info;
-                    program->failed_permutations.push_back(std::move(build->spec));
-                }
-                program->pending.reset();
-                LOG_ERROR(Render_Vulkan, "port: shader {:#x}/{} compilation failed: {}", hash,
-                          build->permutation, build->job.Error());
-                retire();
-            } else {
-                ++i;
-            }
-            continue;
-        }
-        const auto perm_hash = HashCombine(hash, build->permutation);
-        Vulkan::SetObjectName(instance.GetDevice(), build->module,
-                             GetShaderName(build->info.hw_stage, hash, build->permutation));
-        const u64 spv_hash =
-            RegisterShaderBinary(std::move(build->binary), hash, build->permutation);
-        {
-            std::unique_lock lock{programs_mutex};
-            if (build->initial) {
-                program->info = std::move(build->info);
-                // user_data is refreshed on the next lookup; no pointer into a completed job survives.
-                program->info.user_data = {};
-                program->info_template = std::make_unique<Shader::Info>(program->info);
-            }
-            build->spec.info = &program->info;
-            RegisterShaderMeta(program->info, build->spec.fetch_shader_data, build->spec,
-                               perm_hash, build->permutation, spv_hash,
-                               profile.needs_ssbo_store_load_barrier);
-            program->AddPermut(build->module, std::move(build->spec), spv_hash);
-            build->module = nullptr;
-            program->pending.reset();
-        }
-        retire();
     }
+    if (published_any && !wait && !draining_deferred) {
+        DrainDeferredSelections();
+    }
+}
+
+void PipelineCache::PublishCompletedWork() {
+    PublishShaders();
+    PublishGraphics();
+    PublishCompute();
 }
 
 void PipelineCache::PublishGraphics(bool wait) {
@@ -998,6 +1054,14 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
         }();
         if (prioritize) {
             build->job.Prioritize(*compiler);
+        }
+        while (!build->job.Poll() && !build->job.Failed() && !pending_programs.empty()) {
+            auto* front_pgm = pending_programs.front();
+            if (!front_pgm->pending) {
+                break;
+            }
+            front_pgm->pending->job.Wait();
+            PublishShaders();
         }
         build->job.Wait();
     }
@@ -1119,6 +1183,192 @@ void PipelineCache::ReportCompilerStats() {
     }
 }
 
+bool PipelineCache::QueueGraphicsBuild(PipelineSelection& s, bool restore_expected) {
+    if (pending_graphics.contains(s.graphics_key) || !compiler->HasCapacity()) {
+        return false;
+    }
+    const auto stored = [&] {
+        return Storage::DataBase::Instance().Exists(
+            Storage::BlobType::PipelineKey,
+            fmt::format("g_{:#018x}", std::hash<GraphicsPipelineKey>{}(s.graphics_key)));
+    };
+    PhaseTimer capture{g_port_snapshot_ns};
+    auto build = std::make_shared<AsyncGraphicsCompilation>();
+    build->selection = s;
+    build->selection.regs = nullptr;
+    build->live_infos = s.infos;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (s.infos[i]) {
+            build->infos[i] = std::make_unique<Shader::Info>(*s.infos[i]);
+            build->user_data[i].assign(s.infos[i]->user_data.begin(), s.infos[i]->user_data.end());
+            build->infos[i]->user_data = build->user_data[i];
+            build->selection.infos[i] = build->infos[i].get();
+            build->fetch[i].Capture(*build->infos[i]);
+        }
+    }
+    const bool urgent = restore_expected && !s.fresh_permutation && stored();
+    const bool queued = build->job.Start(*compiler, [this, build] {
+        Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch[u32(SwStage::Vertex)]};
+        PhaseTimer compile{g_port_async_ns};
+        auto& sel_snap = build->selection;
+        build->pipeline = std::make_unique<GraphicsPipeline>(
+            instance, scheduler, desc_heap, profile, sel_snap.graphics_key,
+            *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
+            sel_snap.infos, sel_snap.runtime_infos,
+            sel_snap.fetch_shader ? &*sel_snap.fetch_shader : nullptr, sel_snap.modules,
+            build->data, false);
+        return build;
+    }, urgent);
+    if (queued) {
+        static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+        if (log) {
+            LOG_WARNING(Render_Vulkan,
+                        "port: graphics pipeline {:#x} built in the background from flip "
+                        "{}: stored {}, fresh permutation {}, budget left {}, stages "
+                        "{:#x} {:#x}",
+                        std::hash<GraphicsPipelineKey>{}(s.graphics_key),
+                        PortStats::flips.load(std::memory_order_relaxed), stored(),
+                        s.fresh_permutation, SyncBuildBudgetLeft(),
+                        s.graphics_key.stage_hashes[0], s.graphics_key.stage_hashes[4]);
+        }
+        pending_graphics.emplace(s.graphics_key, std::move(build));
+    }
+    return queued;
+}
+
+void PipelineCache::RecordDeferredSelection(const PipelineSelection& s) {
+    static const bool prequeue = [] {
+        const char* env = std::getenv("THEORDER_PREQUEUE_SUBMISSION_PIPELINES");
+        return !env || env[0] != '0';
+    }();
+    if (!prequeue || !s.key_complete || s.worker || !s.regs || s.regs->stage_enable.hs_en ||
+        deferred_selections.size() >= 64) {
+        return;
+    }
+    bool has_stage = false;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (s.infos[i]) {
+            if (!s.stage_programs[i]) {
+                return;
+            }
+            has_stage = true;
+        }
+    }
+    if (!has_stage || graphics_pipelines.contains(s.graphics_key) ||
+        pending_graphics.contains(s.graphics_key) ||
+        (!failed_graphics.empty() && failed_graphics.contains(s.graphics_key))) {
+        return;
+    }
+    for (const auto& existing : deferred_selections) {
+        if (existing->selection.graphics_key == s.graphics_key) {
+            return;
+        }
+    }
+    PhaseTimer capture{g_port_snapshot_ns};
+    auto build = std::make_shared<AsyncGraphicsCompilation>();
+    build->selection = s;
+    build->selection.regs = nullptr;
+    build->live_infos = s.infos;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (s.infos[i]) {
+            build->infos[i] = std::make_unique<Shader::Info>(*s.infos[i]);
+            build->user_data[i].assign(s.infos[i]->user_data.begin(), s.infos[i]->user_data.end());
+            build->infos[i]->user_data = build->user_data[i];
+            build->selection.infos[i] = build->infos[i].get();
+            build->fetch[i].Capture(*build->infos[i]);
+        }
+    }
+    deferred_selections.push_back(std::move(build));
+}
+
+void PipelineCache::DrainDeferredSelections() {
+    if (draining_deferred || deferred_selections.empty() || !compiler ||
+        !PortSettings::Get().async_shaders.load(std::memory_order_relaxed) ||
+        EmulatorSettings.IsShaderCollect()) {
+        return;
+    }
+    draining_deferred = true;
+    SCOPE_EXIT { draining_deferred = false; };
+    static const bool reuse_stage = [] {
+        const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+        return !env || *env != '0';
+    }();
+    for (size_t i = 0; i < deferred_selections.size();) {
+        auto& build = deferred_selections[i];
+        auto& def_sel = build->selection;
+        bool still_pending = false;
+        bool aborted = false;
+        for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
+            Program* pgm = def_sel.stage_programs[stage];
+            if (!pgm) {
+                continue;
+            }
+            const size_t perm_idx = def_sel.stage_perm_indices[stage];
+            if (pgm->compilation_failed || perm_idx >= pgm->modules.size()) {
+                aborted = true;
+                break;
+            }
+            const auto& mod_entry = pgm->modules[perm_idx];
+            if (mod_entry.pending_compile) {
+                still_pending = true;
+                continue;
+            }
+            if (!mod_entry.module) {
+                aborted = true;
+                break;
+            }
+            def_sel.modules[stage] = mod_entry.module;
+            const size_t canonical =
+                reuse_stage && !EmulatorSettings.IsPatchShaders() &&
+                        !EmulatorSettings.IsShaderCollect()
+                    ? pgm->StagePipelinePermutation(perm_idx)
+                    : perm_idx;
+            def_sel.graphics_key.stage_hashes[stage] = HashCombine(pgm->info.pgm_hash, canonical);
+            def_sel.fresh_permutation |= pgm->modules[canonical].fresh;
+        }
+        if (aborted) {
+            deferred_selections[i] = std::move(deferred_selections.back());
+            deferred_selections.pop_back();
+            continue;
+        }
+        if (still_pending) {
+            ++i;
+            continue;
+        }
+        const auto& key = def_sel.graphics_key;
+        const bool is_stored = Storage::DataBase::Instance().Exists(
+            Storage::BlobType::PipelineKey,
+            fmt::format("g_{:#018x}", std::hash<GraphicsPipelineKey>{}(key)));
+        const bool is_known = !def_sel.fresh_permutation && SyncBuildBudgetLeft() && is_stored;
+        if ((failed_graphics.empty() || !failed_graphics.contains(key)) &&
+            !graphics_pipelines.contains(key) && !pending_graphics.contains(key) && !is_known &&
+            compiler->HasCapacity()) {
+            const bool urgent = !def_sel.fresh_permutation && is_stored;
+            const bool queued = build->job.Start(
+                *compiler,
+                [this, build] {
+                    Shader::Gcn::ScopedFetchShaderSnapshot snapshot{
+                        build->fetch[u32(SwStage::Vertex)]};
+                    PhaseTimer compile{g_port_async_ns};
+                    auto& sel_snap = build->selection;
+                    build->pipeline = std::make_unique<GraphicsPipeline>(
+                        instance, scheduler, desc_heap, profile, sel_snap.graphics_key,
+                        *worker_pipeline_caches[AsyncCompiler::WorkerIndex()], sel_snap.infos,
+                        sel_snap.runtime_infos,
+                        sel_snap.fetch_shader ? &*sel_snap.fetch_shader : nullptr,
+                        sel_snap.modules, build->data, false);
+                    return build;
+                },
+                urgent);
+            if (queued) {
+                pending_graphics.emplace(key, std::move(build));
+            }
+        }
+        deferred_selections[i] = std::move(deferred_selections.back());
+        deferred_selections.pop_back();
+    }
+}
+
 bool PipelineCache::PrepareGraphicsPipeline(PipelineSelection& worker_sel) {
     // Tessellation stages read constant buffers from memory at selection time: not prepared.
     if (worker_sel.regs->stage_enable.hs_en) {
@@ -1189,6 +1439,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     } sync_reset{sync_compile};
     if (!RefreshGraphicsKey(sel)) {
         if (sel.compilation_pending) {
+            RecordDeferredSelection(sel);
             ++g_port_pending_draws;
         }
         return nullptr;
@@ -1219,52 +1470,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     const bool can_async = AsyncCompilation() && !sel.regs->stage_enable.hs_en &&
                            !EmulatorSettings.IsShaderCollect();
     const auto build_in_background = [&](bool restore_expected) -> const GraphicsPipeline* {
-        if (!pending_graphics.contains(sel.graphics_key) && compiler->HasCapacity()) {
-            PhaseTimer capture{g_port_snapshot_ns};
-            auto build = std::make_shared<AsyncGraphicsCompilation>();
-            build->selection = sel;
-            build->selection.regs = nullptr;
-            build->live_infos = sel.infos;
-            for (u32 i = 0; i < MaxShaderStages; ++i) {
-                if (sel.infos[i]) {
-                    build->infos[i] = std::make_unique<Shader::Info>(*sel.infos[i]);
-                    build->user_data[i].assign(sel.infos[i]->user_data.begin(), sel.infos[i]->user_data.end());
-                    build->infos[i]->user_data = build->user_data[i];
-                    build->selection.infos[i] = build->infos[i].get();
-                    build->fetch[i].Capture(*build->infos[i]);
-                }
-            }
-            // A stored key past this frame's restore budget comes back from the binary cache in a
-            // few ms: ahead of the driver compiles (~250 ms each), its draws are skipped for a
-            // frame or two instead of seconds (objects blinking at scene starts).
-            const bool urgent = restore_expected && !sel.fresh_permutation && stored();
-            const bool queued = build->job.Start(*compiler, [this, build] {
-                // Only the vertex stage uses fetch-shader guest pointers during pipeline construction.
-                Shader::Gcn::ScopedFetchShaderSnapshot snapshot{build->fetch[u32(SwStage::Vertex)]};
-                PhaseTimer compile{g_port_async_ns};
-                auto& s = build->selection;
-                build->pipeline = std::make_unique<GraphicsPipeline>(
-                    instance, scheduler, desc_heap, profile, s.graphics_key,
-                    *worker_pipeline_caches[AsyncCompiler::WorkerIndex()],
-                    s.infos, s.runtime_infos, s.fetch_shader ? &*s.fetch_shader : nullptr, s.modules,
-                    build->data, false);
-                return build;
-            }, urgent);
-            if (queued) {
-                static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
-                if (log) {
-                    LOG_WARNING(Render_Vulkan,
-                                "port: graphics pipeline {:#x} built in the background from flip "
-                                "{}: stored {}, fresh permutation {}, budget left {}, stages "
-                                "{:#x} {:#x}",
-                                std::hash<GraphicsPipelineKey>{}(sel.graphics_key),
-                                PortStats::flips.load(std::memory_order_relaxed), stored(),
-                                sel.fresh_permutation, SyncBuildBudgetLeft(),
-                                sel.graphics_key.stage_hashes[0], sel.graphics_key.stage_hashes[4]);
-                }
-                pending_graphics.emplace(sel.graphics_key, std::move(build));
-            }
-        }
+        QueueGraphicsBuild(sel, restore_expected);
         ++g_port_pending_draws;
         // port (FEAT-004): record whether this null is a still-compiling key (vs a failed/absent
         // one) so the rasterizer can stall a visible draw on exactly that one build.
@@ -1322,7 +1528,18 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     PublishGraphics();
     PublishCompute();
     PumpWarmUp();
+    pending_compute_fallback_pgm = 0;
+    pending_compute_fallback_spec.reset();
     if (!RefreshComputeKey()) {
+        if (pending_compute_fallback_pgm != 0 && pending_compute_fallback_spec) {
+            const u64 pgm = pending_compute_fallback_pgm;
+            if (const auto* fallback = FallbackComputePipeline(pgm, &*pending_compute_fallback_spec)) {
+                ++g_port_fallback_dispatches;
+                CountComputeRun(pgm);
+                return fallback;
+            }
+            CountComputeRun(pgm);
+        }
         return nullptr;
     }
     const u64 pgm_hash = sel.infos[0]->pgm_hash;
@@ -1333,18 +1550,16 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         }
         return found->second.get();
     }
+    const bool can_async = SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
+                           !EmulatorSettings.IsShaderCollect() &&
+                           !sync_compute_keys.contains(compute_key.value);
     // A pipeline an earlier session built is restored in 1-2 ms: built here (GetGraphicsPipeline).
     const bool known = !sel.fresh_permutation && SyncBuildBudgetLeft() &&
                        !pending_compute.contains(compute_key) &&
                        Storage::DataBase::Instance().Exists(
                            Storage::BlobType::PipelineKey,
                            fmt::format("c_{:#018x}", compute_key.value));
-    // A skippable dispatch is redone every frame: skipping one costs nothing, so even a known
-    // pipeline builds in the background (a stored key may be another session's permutation at
-    // that index, and the driver then compiled it here: 0x804aeead, the particle lighting, 177 ms).
-    if ((!known || !PortToggle::Disabled(PortToggle::SyncBuildBudget)) &&
-        SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
-        !EmulatorSettings.IsShaderCollect() && !sync_compute_keys.contains(compute_key.value)) {
+    const auto build_in_background = [&]() -> const ComputePipeline* {
         static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
         if (log && !pending_compute.contains(compute_key)) {
             LOG_WARNING(Render_Vulkan, "port: compute pipeline of {:#x} built in the background "
@@ -1378,7 +1593,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
             CountComputeRun(pgm_hash);
             return fallback;
         }
+        CountComputeRun(pgm_hash);
         return nullptr;
+    };
+    if (can_async && (pending_compute.contains(compute_key) || !known)) {
+        return build_in_background();
     }
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
@@ -1399,9 +1618,15 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         CompileTimer timer;
 
         ComputePipeline::SerializationSupport sdata{};
+        g_pipeline_restore_only = can_async;
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],
                                                        sel.modules[0], sdata, false);
+        g_pipeline_restore_only = false;
+        if (!it.value()->Handle()) {
+            compute_pipelines.erase(it);
+            return build_in_background();
+        }
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
 
@@ -1450,7 +1675,8 @@ std::optional<u32> ImageOnlyDifference(const Shader::StageSpecialization& a,
 // (Rasterizer::BindTextures). The Order's particle lighting (0x804aeead) samples ~30 slots whose
 // T#s change dimension and format with the lights in view: hundreds of permutations, ~40 new
 // ones each session, and every skipped dispatch was smoke and particles blinking.
-const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
+const ComputePipeline* PipelineCache::FallbackComputePipeline(
+    u64 pgm_hash, const Shader::StageSpecialization* spec_override) {
     if (PortToggle::Disabled(PortToggle::ComputeFallback)) {
         return nullptr;
     }
@@ -1459,19 +1685,30 @@ const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
         return nullptr;
     }
     const auto& modules = program->second->modules;
-    const auto current = std::ranges::find(modules, sel.modules[0], &Program::Module::module);
-    if (current == modules.end()) {
-        return nullptr;
+    const Shader::StageSpecialization* target_spec = spec_override;
+    size_t target_index = modules.size();
+    if (!target_spec) {
+        const auto current = std::ranges::find(modules, sel.modules[0], &Program::Module::module);
+        if (current == modules.end()) {
+            return nullptr;
+        }
+        target_spec = &current->spec;
+        target_index = std::distance(modules.begin(), current);
     }
     const ComputePipeline* best = nullptr;
     size_t best_index = 0;
     u32 best_count = ~0u;
     for (size_t i = 0; i < modules.size(); ++i) {
-        const auto found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, i)});
+        auto found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, i)});
+        if ((found == compute_pipelines.end() || !found->second) &&
+            modules[i].compute_pipeline_permutation) {
+            const size_t canonical = *modules[i].compute_pipeline_permutation;
+            found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, canonical)});
+        }
         if (found == compute_pipelines.end() || !found->second) {
             continue;
         }
-        if (const auto count = ImageOnlyDifference(current->spec, modules[i].spec);
+        if (const auto count = ImageOnlyDifference(*target_spec, modules[i].spec);
             count && *count < best_count) {
             best = found->second.get();
             best_index = i;
@@ -1485,15 +1722,15 @@ const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
         for (size_t i = 0; i < modules.size(); ++i) {
             if (compute_pipelines.contains(ComputePipelineKey{HashCombine(pgm_hash, i)})) {
                 ++built;
-                same_shape += modules[i].spec.images.size() == current->spec.images.size() &&
-                              modules[i].spec.buffers == current->spec.buffers &&
-                              modules[i].spec.samplers == current->spec.samplers &&
-                              modules[i].spec.bitset == current->spec.bitset;
+                same_shape += modules[i].spec.images.size() == target_spec->images.size() &&
+                              modules[i].spec.buffers == target_spec->buffers &&
+                              modules[i].spec.samplers == target_spec->samplers &&
+                              modules[i].spec.bitset == target_spec->bitset;
             }
         }
         LOG_WARNING(Render_Vulkan, "port: compute {:#x} permutation {}: {} of {} permutations "
                     "built, {} with the same buffers/samplers/bound set, fallback {}",
-                    pgm_hash, std::distance(modules.begin(), current), built, modules.size(),
+                    pgm_hash, target_index, built, modules.size(),
                     same_shape, best ? fmt::format("{} ({} images)", best_index, best_count)
                                      : std::string{"none"});
     }
@@ -1526,19 +1763,37 @@ bool PipelineCache::SkippableDispatch(const Shader::Info& info) const {
     if (mode == '0' || mode == '1') {
         return mode == '1';
     }
-    // A frame can go without the program (the guest flips one frame twice).
-    constexpr u32 MinFrames = 8, MaxIdleFlips = 4;
+    static const bool recurring_async = [] {
+        const char* env = std::getenv("THEORDER_RECURRING_COMPUTE_ASYNC");
+        return !env || env[0] != '0';
+    }();
     const auto runs = compute_runs.find(info.pgm_hash);
-    const u64 frame = PortStats::flips.load(std::memory_order_relaxed);
-    if (runs == compute_runs.end() || runs->second.frames < MinFrames ||
-        runs->second.last_frame + MaxIdleFlips < frame) {
+    if (runs == compute_runs.end()) {
         return false;
+    }
+    if (recurring_async) {
+        // Once a non-image-writing compute shader has executed in >= 3 distinct frames (matching
+        // TOport's RecurringMoments = 3), it is proven recurring and stays eligible for background
+        // compilation + FallbackComputePipeline even across brief menu/camera pauses.
+        constexpr u32 MinFrames = 3;
+        if (runs->second.frames < MinFrames) {
+            return false;
+        }
+    } else {
+        // A frame can go without the program (the guest flips one frame twice).
+        constexpr u32 MinFrames = 8, MaxIdleFlips = 4;
+        const u64 frame = PortStats::flips.load(std::memory_order_relaxed);
+        if (runs->second.frames < MinFrames ||
+            runs->second.last_frame + MaxIdleFlips < frame) {
+            return false;
+        }
     }
     return std::ranges::none_of(info.images, [](const auto& image) { return image.is_written; });
 }
 
 bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     std::memset(&sel.graphics_key, 0, sizeof(GraphicsPipelineKey));
+    sel.key_complete = false;
     const auto& regs = (*sel.regs);
     auto& key = sel.graphics_key;
 
@@ -1711,6 +1966,11 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         }
     }
 
+    if (sel.compilation_pending) {
+        sel.key_complete = true;
+        return false;
+    }
+
     return true;
 }
 
@@ -1746,6 +2006,9 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             sel.compilation_pending = true;
             return false;
         }
+        if (!sel.modules[stage_out_idx]) {
+            sel.compilation_pending = true;
+        }
         if (fetch_shader_) {
             sel.fetch_shader = fetch_shader_;
         }
@@ -1754,10 +2017,16 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
+    sel.stage_programs.fill(nullptr);
+    sel.stage_perm_indices.fill(0);
     sel.fresh_permutation = false;
 
+    static const bool multi_stage = [] {
+        const char* env = std::getenv("THEORDER_MULTI_STAGE_QUEUE");
+        return !env || env[0] != '0';
+    }();
     bind_stage(HwStage::Fragment, SwStage::Fragment);
-    if (sel.compilation_pending) {
+    if (sel.compilation_pending && (!multi_stage || sel.worker || !sel.infos[u32(SwStage::Fragment)])) {
         return false;
     }
 
@@ -1822,13 +2091,15 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         }
         break;
     case AmdGpu::ShaderStageEnable::VgtStages::Vs:
-        bind_stage(HwStage::Vertex, SwStage::Vertex);
-        if (sel.compilation_pending) {
+        if (!bind_stage(HwStage::Vertex, SwStage::Vertex)) {
             return false;
         }
         break;
     default:
         LOG_WARNING(Render_Vulkan, "unimplemented shader stage {}", (u32)regs.stage_enable.raw);
+        return false;
+    }
+    if (sel.compilation_pending && (!multi_stage || sel.worker)) {
         return false;
     }
 
@@ -1943,11 +2214,19 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         }
         info.AddBindings(binding);
         const size_t perm_idx = std::distance(program->modules.begin(), it);
+        static const bool reuse_stage = [] {
+            const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+            return !env || *env != '0';
+        }();
+        const size_t canonical =
+            reuse_stage && !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()
+                ? program->StagePipelinePermutation(perm_idx)
+                : perm_idx;
         worker.stages.push_back(
             {program, params.hash, hw_stage, info.pgm_base, &info.flattened_ud_buf});
-        sel.fresh_permutation |= it->fresh;
+        sel.fresh_permutation |= program->modules[canonical].fresh;
         return std::make_tuple(&info, it->module, ToFetchShader(it->spec.fetch_shader_data),
-                               HashCombine(params.hash, perm_idx));
+                               HashCombine(params.hash, canonical));
     }
 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
@@ -1957,10 +2236,21 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     const bool compile_async = AsyncCompilation() && hw_stage != HwStage::Compute &&
                                !sel.regs->stage_enable.hs_en &&
                                !EmulatorSettings.IsShaderCollect();
-    if (!compile_async && it_pgm != program_cache.end() && it_pgm->second->pending) {
+    static const bool recurring_compute_async = [] {
+        const char* env = std::getenv("THEORDER_RECURRING_COMPUTE_ASYNC");
+        return !env || env[0] != '0';
+    }();
+    const bool async_compute_perm =
+        recurring_compute_async && AsyncCompilation() && hw_stage == HwStage::Compute &&
+        !EmulatorSettings.IsShaderCollect() && it_pgm != program_cache.end() &&
+        !it_pgm->second->modules.empty() && SkippableDispatch(it_pgm->second->info);
+    if (!compile_async && !async_compute_perm && it_pgm != program_cache.end() &&
+        it_pgm->second->HasPending()) {
         {
             PhaseTimer waiting{g_port_compile_wait_ns};
-            it_pgm->second->pending->job.Wait();
+            for (auto& pending_build : it_pgm->second->pending_builds) {
+                pending_build->job.Wait();
+            }
         }
         PublishShaders();
     }
@@ -1970,12 +2260,40 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         program_cache.erase(it_pgm);
         it_pgm = program_cache.end();
     }
+    static const bool multi_stage = [] {
+        const char* env = std::getenv("THEORDER_MULTI_STAGE_QUEUE");
+        return !env || env[0] != '0';
+    }();
+    static const bool multi_perm = [] {
+        const char* env = std::getenv("THEORDER_MULTI_PERMUTATION_QUEUE");
+        return !env || env[0] != '0';
+    }();
     if (it_pgm == program_cache.end()) {
         auto new_program = std::make_unique<Program>(hw_stage, sw_stage, params);
         if (compile_async) {
-            QueueShader(*new_program, hw_stage, sw_stage, params, runtime_info, binding, 0, true);
-            std::unique_lock lock{programs_mutex};
-            program_cache.emplace(params.hash, std::move(new_program));
+            const bool queued = QueueShader(*new_program, hw_stage, sw_stage, params, runtime_info,
+                                            binding, 0, true);
+            Program* pgm_ptr = new_program.get();
+            {
+                std::unique_lock lock{programs_mutex};
+                program_cache.emplace(params.hash, std::move(new_program));
+            }
+            if (queued && pgm_ptr->info_template) {
+                pgm_ptr->info.pgm_base = params.Base();
+                pgm_ptr->info.user_data = params.user_data;
+                pgm_ptr->info.RefreshFlatBuf();
+                if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(pgm_ptr->info);
+                pgm_ptr->info.AddBindings(binding);
+                if (multi_stage && multi_perm && !sel.worker && !pgm_ptr->modules.empty()) {
+                    sel.stage_programs[static_cast<u32>(sw_stage)] = pgm_ptr;
+                    sel.stage_perm_indices[static_cast<u32>(sw_stage)] = 0;
+                    sel.fresh_permutation = true;
+                    return std::make_tuple(
+                        &pgm_ptr->info, vk::ShaderModule{},
+                        ToFetchShader(pgm_ptr->modules[0].spec.fetch_shader_data),
+                        HashCombine(params.hash, 0));
+                }
+            }
             return {};
         }
         auto start = binding;
@@ -2001,11 +2319,33 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     }
 
     auto& program = it_pgm.value();
-    if (program->compilation_failed || (program->modules.empty() && program->pending)) {
+    if (program->compilation_failed) {
+        return {};
+    }
+    if (program->modules.empty() && program->HasPending()) {
+        if (program->info_template) {
+            program->info.AddBindings(binding);
+        }
         return {};
     }
     if (program->modules.empty() && compile_async) {
-        QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, 0, true);
+        if (QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, 0, true) &&
+            program->info_template) {
+            program->info.pgm_base = params.Base();
+            program->info.user_data = params.user_data;
+            program->info.RefreshFlatBuf();
+            if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(program->info);
+            program->info.AddBindings(binding);
+            if (multi_stage && multi_perm && !sel.worker && !program->modules.empty()) {
+                sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+                sel.stage_perm_indices[static_cast<u32>(sw_stage)] = 0;
+                sel.fresh_permutation = true;
+                return std::make_tuple(
+                    &program->info, vk::ShaderModule{},
+                    ToFetchShader(program->modules[0].spec.fetch_shader_data),
+                    HashCombine(params.hash, 0));
+            }
+        }
         return {};
     }
     if (!program->info_template) {
@@ -2030,6 +2370,34 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                       program->modules[program->last_used].spec == spec
                   ? program->modules.begin() + program->last_used
                   : std::ranges::find(program->modules, spec, &Program::Module::spec);
+    static const bool warm_load_program = [] {
+        const char* env = std::getenv("THEORDER_WARM_LOAD_PROGRAM");
+        return !env || env[0] != '0';
+    }();
+    if (it == program->modules.end() && warm_load_program && program->warm_partial) {
+        if (LoadCachedProgram(params.hash, hw_stage)) {
+            perm_idx = program->modules.size();
+            perm_hash = HashCombine(params.hash, perm_idx);
+            it = std::ranges::find(program->modules, spec, &Program::Module::spec);
+        }
+    }
+    if (it != program->modules.end() && it->pending_compile) {
+        if (async_compute_perm) {
+            pending_compute_fallback_pgm = params.hash;
+            pending_compute_fallback_spec = it->spec;
+        }
+        info.AddBindings(binding);
+        if (multi_stage && hw_stage != HwStage::Compute && !sel.worker) {
+            const size_t pending_idx = std::distance(program->modules.begin(), it);
+            sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+            sel.stage_perm_indices[static_cast<u32>(sw_stage)] = pending_idx;
+            sel.fresh_permutation = true;
+            return std::make_tuple(&program->info, vk::ShaderModule{},
+                                   ToFetchShader(it->spec.fetch_shader_data),
+                                   HashCombine(params.hash, pending_idx));
+        }
+        return {};
+    }
     if (it != program->modules.end() && !it->module &&
         !LoadDeferredModule(*program, std::distance(program->modules.begin(), it))) {
         it = program->modules.end(); // its binary is gone: compile it again
@@ -2038,18 +2406,42 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         program->last_used = std::distance(program->modules.begin(), it);
     }
     if (it == program->modules.end()) {
-        if (program->pending || std::ranges::find(program->failed_permutations, spec) !=
-                                    program->failed_permutations.end()) {
+        if (std::ranges::find(program->failed_permutations, spec) !=
+            program->failed_permutations.end()) {
+            info.AddBindings(binding);
             return {};
         }
-        if (compile_async) {
+        if (!multi_perm && program->HasPending()) {
+            if (async_compute_perm) {
+                pending_compute_fallback_pgm = params.hash;
+                pending_compute_fallback_spec = std::move(spec);
+            }
+            info.AddBindings(binding);
+            return {};
+        }
+        if (compile_async || async_compute_perm) {
             if (!program->modules.empty()) {
                 LogNewPermutation(params.hash, perm_idx, spec,
                                   program->modules[std::min(program->last_used,
                                                             program->modules.size() - 1)].spec);
             }
-            QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, perm_idx, false,
-                        std::move(spec));
+            if (async_compute_perm) {
+                pending_compute_fallback_pgm = params.hash;
+                pending_compute_fallback_spec = spec;
+            }
+            const bool queued = QueueShader(*program, hw_stage, sw_stage, params, runtime_info,
+                                            binding, perm_idx, false, std::move(spec));
+            info.AddBindings(binding);
+            if (queued && multi_stage && multi_perm && hw_stage != HwStage::Compute &&
+                !sel.worker && perm_idx < program->modules.size()) {
+                sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+                sel.stage_perm_indices[static_cast<u32>(sw_stage)] = perm_idx;
+                sel.fresh_permutation = true;
+                return std::make_tuple(
+                    &program->info, vk::ShaderModule{},
+                    ToFetchShader(program->modules[perm_idx].spec.fetch_shader_data),
+                    HashCombine(params.hash, perm_idx));
+            }
             return {};
         }
         if (!program->modules.empty()) {
@@ -2095,11 +2487,15 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         perm_idx = std::distance(program->modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
     }
-    sel.fresh_permutation |= program->modules[perm_idx].fresh;
     static const bool reuse_compute = [] {
         const char* env = std::getenv("THEORDER_COMPUTE_PIPELINE_REUSE");
         return !env || *env != '0';
     }();
+    static const bool reuse_stage = [] {
+        const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+        return !env || *env != '0';
+    }();
+    size_t canonical_idx = perm_idx;
     if (hw_stage == HwStage::Compute && reuse_compute &&
         !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()) {
         const bool first_lookup = !program->modules[perm_idx].compute_pipeline_permutation;
@@ -2112,9 +2508,29 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                             static_cast<unsigned long long>(params.hash), perm_idx, canonical,
                             static_cast<unsigned long long>(program->modules[perm_idx].spv_hash));
             }
+            canonical_idx = canonical;
+            perm_hash = HashCombine(params.hash, canonical);
+        }
+    } else if (hw_stage != HwStage::Compute && reuse_stage &&
+               !EmulatorSettings.IsPatchShaders() && !EmulatorSettings.IsShaderCollect()) {
+        const auto canonical = program->StagePipelinePermutation(perm_idx);
+        if (canonical != perm_idx) {
+            static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
+            if (log) {
+                std::printf("Stage content reuse: shader %016llx permutation %zu -> %zu "
+                            "(SPIR-V %016llx)\n",
+                            static_cast<unsigned long long>(params.hash), perm_idx, canonical,
+                            static_cast<unsigned long long>(program->modules[perm_idx].spv_hash));
+            }
+            canonical_idx = canonical;
             perm_hash = HashCombine(params.hash, canonical);
         }
     }
+    if (hw_stage != HwStage::Compute) {
+        sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+        sel.stage_perm_indices[static_cast<u32>(sw_stage)] = canonical_idx;
+    }
+    sel.fresh_permutation |= program->modules[canonical_idx].fresh;
     return std::make_tuple(&program->info, module,
                            ToFetchShader(program->modules[perm_idx].spec.fetch_shader_data),
                            perm_hash);

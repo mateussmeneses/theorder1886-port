@@ -58,6 +58,7 @@ struct Program {
         /// port: made this session, at the next free index: a stored pipeline key with that
         /// index may be another session's permutation there (not "known", see GetGraphicsPipeline).
         bool fresh = false;
+        bool pending_compile = false;
         std::optional<size_t> compute_pipeline_permutation;
     };
     static constexpr size_t MaxPermutations = 8;
@@ -70,55 +71,89 @@ struct Program {
     /// whose user data the GPU thread rewrites every draw). Guarded by programs_mutex.
     std::unique_ptr<Shader::Info> info_template;
     std::shared_ptr<AsyncShaderCompilation> pending;
+    std::vector<std::shared_ptr<AsyncShaderCompilation>> pending_builds;
     bool compilation_failed = false;
+    bool warm_partial = false; ///< port: created by warm-up; other cached perms loaded on miss
     std::vector<Shader::StageSpecialization> failed_permutations;
+
+    [[nodiscard]] bool HasPending() const noexcept {
+        return pending != nullptr || !pending_builds.empty();
+    }
 
     Program() = default;
     Program(Shader::HwStage stage, Shader::SwStage l_stage, Shader::ShaderParams params)
         : info{stage, l_stage, params} {}
 
     void AddPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec, u64 spv_hash) {
+        const size_t idx = modules.size();
         modules.emplace_back(module, std::move(spec), spv_hash);
         modules.back().fresh = true;
+        (void)StagePipelinePermutation(idx);
     }
 
-    size_t ComputePipelinePermutation(size_t index) {
-        auto& selected = modules[index];
-        if (info.sw_stage != Shader::SwStage::Compute || !selected.spv_hash ||
-            !selected.spec.Valid()) {
+    bool CompatibleStagePermutation(size_t index, size_t candidate) const {
+        if (index >= modules.size() || candidate >= modules.size()) {
+            return false;
+        }
+        const auto& selected = modules[index];
+        const auto& other = modules[candidate];
+        if (!selected.spv_hash || other.spv_hash != selected.spv_hash || !selected.spec.Valid() ||
+            !other.spec.Valid()) {
+            return false;
+        }
+        const auto& a = selected.spec;
+        const auto& b = other.spec;
+        return a.runtime_info == b.runtime_info && a.start == b.start &&
+               a.fetch_shader_data == b.fetch_shader_data && a.vs_attribs == b.vs_attribs &&
+               a.buffers.size() == b.buffers.size() && a.samplers.size() == b.samplers.size() &&
+               a.fmasks.size() == b.fmasks.size() && a.images == b.images;
+    }
+
+    size_t StagePipelinePermutation(size_t index) const {
+        if (index >= modules.size()) {
             return index;
         }
-        // The same emitted binary can result from different resource specializations.
-        // Keep their metadata, but reuse a pipeline only with the same descriptor ABI.
-        // Image specializations must also match: a pipeline may retain a fallback-image
-        // mask used by BindTextures even when it is later selected for an exact dispatch.
-        const auto compatible = [&](size_t candidate) {
-            const auto& other = modules[candidate];
-            const auto& a = selected.spec;
-            const auto& b = other.spec;
-            return other.spv_hash == selected.spv_hash && b.Valid() &&
-                   a.runtime_info == b.runtime_info && a.start == b.start &&
-                   a.buffers.size() == b.buffers.size() && a.samplers.size() == b.samplers.size() &&
-                   a.fmasks.size() == b.fmasks.size() && a.images == b.images;
-        };
+        const auto& selected = modules[index];
+        if (!selected.spv_hash || !selected.spec.Valid()) {
+            return index;
+        }
         if (selected.compute_pipeline_permutation &&
-            compatible(*selected.compute_pipeline_permutation)) {
+            CompatibleStagePermutation(index, *selected.compute_pipeline_permutation)) {
             return *selected.compute_pipeline_permutation;
         }
         for (size_t candidate = 0; candidate < index; ++candidate) {
-            if (compatible(candidate)) {
-                selected.compute_pipeline_permutation = candidate;
+            if (CompatibleStagePermutation(index, candidate)) {
                 return candidate;
             }
         }
-        selected.compute_pipeline_permutation = index;
         return index;
+    }
+
+    size_t StagePipelinePermutation(size_t index) {
+        if (index >= modules.size()) {
+            return index;
+        }
+        auto& selected = modules[index];
+        if (!selected.spv_hash || !selected.spec.Valid()) {
+            return index;
+        }
+        const size_t canonical = std::as_const(*this).StagePipelinePermutation(index);
+        selected.compute_pipeline_permutation = canonical;
+        return canonical;
+    }
+
+    size_t ComputePipelinePermutation(size_t index) {
+        if (info.sw_stage != Shader::SwStage::Compute) {
+            return index;
+        }
+        return StagePipelinePermutation(index);
     }
 
     void InsertPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
                       size_t perm_idx, u64 spv_hash = 0) {
         modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
         modules[perm_idx] = {module, std::move(spec), spv_hash};
+        (void)StagePipelinePermutation(perm_idx);
     }
 };
 
@@ -143,10 +178,13 @@ struct PipelineSelection {
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<Program*, MaxShaderStages> stage_programs{};
+    std::array<size_t, MaxShaderStages> stage_perm_indices{};
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     bool motion = false;
     bool compilation_pending = false;
+    bool key_complete = false;
     bool fresh_permutation = false; ///< port: a stage uses a Program::Module::fresh permutation
     DrawIndirectParams draw_indirect_params{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
@@ -168,6 +206,7 @@ struct PrepWorker {
 };
 
 struct PreparedDraw;
+class DrawPreparation;
 
 class PipelineCache {
 public:
@@ -183,6 +222,10 @@ public:
     bool StartBackgroundWarmUp();
     void StartOnDemand();
     void Sync();
+    void SetDrawPreparation(DrawPreparation* prep) noexcept {
+        draw_prep = prep;
+    }
+    void PublishCompletedWork();
     void ReportCompilerStats();
 
     /// port: driver pipeline cache persistence (BP08 from iss_pc)
@@ -256,6 +299,9 @@ private:
     void PublishGraphics(bool wait = false);
     void PublishCompute(bool wait = false);
     void FinishCompilations();
+    bool QueueGraphicsBuild(PipelineSelection& s, bool restore_expected);
+    void RecordDeferredSelection(const PipelineSelection& s);
+    void DrainDeferredSelections();
     void SeedWorkerCaches();
     bool CheckCacheProfile();
     struct BackgroundWarmup;
@@ -336,8 +382,11 @@ private:
     };
     tsl::robin_map<u64, ComputeRuns> compute_runs;
     bool SkippableDispatch(const Shader::Info& info) const;
-    const ComputePipeline* FallbackComputePipeline(u64 pgm_hash);
+    const ComputePipeline* FallbackComputePipeline(
+        u64 pgm_hash, const Shader::StageSpecialization* spec_override = nullptr);
     void CountComputeRun(u64 pgm_hash);
+    u64 pending_compute_fallback_pgm = 0;
+    std::optional<Shader::StageSpecialization> pending_compute_fallback_spec;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     std::vector<Program*> pending_programs;
     /// port: exclusive for program/permutation insertions, shared for worker lookups.
@@ -352,6 +401,9 @@ private:
     tsl::robin_map<ComputePipelineKey, std::unique_ptr<ComputePipeline>> compute_pipelines;
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>> graphics_pipelines;
     PipelineSelection sel{}; ///< GPU thread selection state
+    DrawPreparation* draw_prep = nullptr;
+    std::vector<std::shared_ptr<AsyncGraphicsCompilation>> deferred_selections;
+    bool draining_deferred = false;
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
 

@@ -1016,6 +1016,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
     auto [it_pgm, new_program] = program_cache.try_emplace(program->info.pgm_hash);
     if (new_program) {
         module = CompileSPV(spv, instance.GetDevice());
+        program->warm_partial = true;
         it_pgm.value() = std::move(program);
     } else {
         const auto& it = std::ranges::find(it_pgm.value()->modules, spec, &Program::Module::spec);
@@ -1076,7 +1077,13 @@ bool PipelineCache::LoadCachedProgram(u64 pgm_hash, Shader::HwStage stage) {
     static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
     const auto started = std::chrono::steady_clock::now();
     const char* stop = "limit";
+    const auto it_existing = program_cache.find(pgm_hash);
+    Program* existing = it_existing != program_cache.end() ? it_existing->second.get() : nullptr;
+    if (existing) {
+        existing->warm_partial = false;
+    }
     std::unique_ptr<Program> program;
+    size_t loaded_count = 0;
     for (size_t index = 0; index < MaxCachedPermutations; ++index) {
         std::vector<u8> meta_blob;
         const u64 perm_hash = HashCombine(pgm_hash, index);
@@ -1088,7 +1095,10 @@ bool PipelineCache::LoadCachedProgram(u64 pgm_hash, Shader::HwStage stage) {
                 meta_prefetch->metas.erase(found);
             }
         } else {
-            db.Load(Storage::BlobType::ShaderMeta, fmt::format("{:#018x}", perm_hash), meta_blob);
+            const auto meta_name = fmt::format("{:#018x}", perm_hash);
+            if (db.Exists(Storage::BlobType::ShaderMeta, meta_name)) {
+                db.Load(Storage::BlobType::ShaderMeta, meta_name, meta_blob);
+            }
         }
         if (meta_blob.empty()) {
             stop = "no meta";
@@ -1108,6 +1118,24 @@ bool PipelineCache::LoadCachedProgram(u64 pgm_hash, Shader::HwStage stage) {
             stop = "meta of another program or stage";
             break;
         }
+        if (existing) {
+            if (info->buffers.size() != existing->info.buffers.size() ||
+                info->images.size() != existing->info.images.size() ||
+                info->samplers.size() != existing->info.samplers.size() ||
+                info->fmasks.size() != existing->info.fmasks.size()) {
+                stop = "resources differ from existing program";
+                break;
+            }
+            std::unique_lock lock{programs_mutex};
+            if (index >= existing->modules.size() ||
+                (!existing->modules[index].module && !existing->modules[index].pending_compile &&
+                 !existing->modules[index].spec.Valid())) {
+                spec.info = &existing->info;
+                existing->InsertPermut(vk::ShaderModule{}, std::move(spec), index, spv_hash);
+                ++loaded_count;
+            }
+            continue;
+        }
         if (!program) {
             program = std::make_unique<Program>();
             program->info = std::move(*info);
@@ -1116,15 +1144,20 @@ bool PipelineCache::LoadCachedProgram(u64 pgm_hash, Shader::HwStage stage) {
         // The module itself is read when this specialization is first used (LoadDeferredModule):
         // material shaders keep hundreds of permutations a session mostly does not need.
         program->InsertPermut(vk::ShaderModule{}, std::move(spec), index, spv_hash);
+        ++loaded_count;
     }
     if (log) {
         LOG_WARNING(Render_Vulkan,
                     "port: cached program {:#x} ({}): {} permutations in {:.1f} ms, stopped: {}",
-                    pgm_hash, u32(stage), program ? program->modules.size() : 0,
+                    pgm_hash, u32(stage),
+                    existing ? existing->modules.size() : (program ? program->modules.size() : 0),
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
                                                               started)
                         .count(),
                     stop);
+    }
+    if (existing) {
+        return loaded_count > 0;
     }
     if (!program) {
         return false;
@@ -1146,6 +1179,10 @@ vk::ShaderModule PipelineCache::LoadDeferredModule(Program& program, size_t perm
         return {};
     }
     entry.module = CompileSPV(spv, instance.GetDevice());
+    (void)program.StagePipelinePermutation(perm_idx);
+    if (program.info.sw_stage == Shader::SwStage::Vertex) {
+        BbFaceDepth::Register(entry.module, spv, program.info.pgm_hash);
+    }
     return entry.module;
 }
 
@@ -1301,9 +1338,10 @@ void PipelineCache::StartOnDemand() {
                     }
                 },
                 [&stop] { return stop.stop_requested(); });
+            const size_t metas_read = prefetch->metas.size();
             prefetch->ready.store(!stop.stop_requested(), std::memory_order_release);
             std::printf("Shader cache: %zu permutation metas read in %.1f s\n",
-                        prefetch->metas.size(),
+                        metas_read,
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - started)
                             .count());
             if (!stop.stop_requested()) {
@@ -1585,6 +1623,10 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
                     if (!spv.empty() && SpvHash(spv) == stage->spv_hash) {
                         const auto module_started = std::chrono::steady_clock::now();
                         stage->module = CompileSPV(spv, stage->device);
+                        if (stage->program->info.sw_stage == Shader::SwStage::Vertex) {
+                            BbFaceDepth::Register(stage->module, spv,
+                                                  stage->program->info.pgm_hash);
+                        }
                         module_time = ElapsedNs(module_started);
                         warm.module_ns += module_time;
                         ++warm.modules;
@@ -1609,6 +1651,7 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
     const auto it_pgm = program_cache.find(hash);
     if (it_pgm == program_cache.end()) {
         Program* program = stage.program.get();
+        program->warm_partial = true;
         program->InsertPermut(stage.module, std::move(stage.spec), stage.perm_idx, stage.spv_hash);
         program_cache.emplace(hash, std::move(stage.program));
         stage.module_kept = true;
@@ -1618,7 +1661,7 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
     }
     // The game already uses this shader: its permutations are the ones that count.
     Program& program = *it_pgm->second;
-    if (program.pending) {
+    if (program.HasPending()) {
         stage.why = "program compiling";
         return false; // the game is compiling a permutation that takes the next index
     }
@@ -1643,6 +1686,7 @@ bool PipelineCache::MergeWarmStage(WarmStage& stage) {
         if (!it->module) { // a deferred cached permutation (LoadCachedProgram): use this one
             it->module = stage.module;
             it->spv_hash = stage.spv_hash;
+            (void)program.StagePipelinePermutation(std::distance(program.modules.begin(), it));
             stage.module_kept = true;
         }
         stage.result = it->module;

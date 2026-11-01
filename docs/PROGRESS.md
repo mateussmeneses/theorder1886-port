@@ -2,6 +2,37 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-01: shader compiler, warm-cache permutation preservation, and pipeline pre-queueing (4 PR branches)
+
+- **Scope:** investigated and implemented shader/pipeline compilation stutter reductions across
+  `vk_pipeline_cache.cpp/.h`, `vk_pipeline_serialization.cpp`, `vk_async_compiler.h`, and `resource.h`,
+  separated into four independent PR branches (`perf/pr1-warm-cache-and-stage-reuse`,
+  `perf/pr2-parallel-pipeline-prequeue`, `perf/pr3-compute-async-and-point-light-guard`,
+  `perf/pr4-compile-budget-and-fair-queue`) plus `perf/stutter-optimizations-combined`.
+- **Key fixes (all gated by A/B environment variables):**
+  - `THEORDER_WARM_LOAD_PROGRAM=1`: marks warm-up `Program` entries `warm_partial` and merges all stored
+    `.meta` permutations `0..N-1` on the first specialization miss so `StartHotWarmUp` no longer masks
+    cached permutations or shifts permutation indices across sessions.
+  - `THEORDER_STAGE_CONTENT_REUSE=1`: canonicalizes graphics stage permutations with identical `spv_hash`
+    and specialization layout (`StagePipelinePermutation`).
+  - `THEORDER_MULTI_STAGE_QUEUE=1`, `THEORDER_MULTI_PERMUTATION_QUEUE=1`,
+    `THEORDER_PREQUEUE_SUBMISSION_PIPELINES=1`: queues vertex/geometry stages alongside pending fragment
+    compiles, allows concurrent permutation builds per `Program`, and snapshots deferred
+    `AsyncGraphicsCompilation` builds at the draw call so `DrainDeferredSelections` queues pipeline
+    builds as soon as stage modules publish without re-reading guest memory.
+  - `THEORDER_POINT_LIGHT_GUARD=1`, `THEORDER_RECURRING_COMPUTE_ASYNC=1`: enables the `0x804aeead`
+    unread light-slot specialization guard by default and lowers recurring non-image-writing compute
+    async threshold to 3 frames with binary-restore-only fast path.
+  - `THEORDER_COMPILE_BUDGET=1`, `THEORDER_FAIR_QUEUE=1`: adds 250 ms RAM/CPU pressure pacing for
+    excess background workers and starvation prevention for un-prioritized urgent bursts while keeping
+    `THEORDER_VISIBLE_PIPELINE_PRIORITY=1` immediate.
+- **Validation & Benchmarks:** all 51 C/C++ suites and the Python test suite pass. Across 60-second
+  matched Cold, Warm, and Revisit runs (`docs/PERFORMANCE_BASELINE.md`), GPU-thread compile time dropped
+  by 38.9% (Cold), 58.9% (Warm), and 50.0% (Revisit); GPU-thread synchronous wait time dropped by 81.4%
+  (Cold), 59.8% (Warm), and 65.7% (Revisit); warm-cache driver compilations dropped from 65 to 1
+  (-98.5%); and immediate revisit driver compilations dropped from 60 to 0 (100% binary cache hit rate,
+  worst post-boot frame reduced from 405.13 ms to 34.06 ms, 0 stalls > 50 ms post-boot).
+
 ## 2026-10-27: non-destructive portable settings migration (draft PR)
 
 - Source review found `Launcher.check_version_migration` was deleting both legacy

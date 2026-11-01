@@ -26,5 +26,7 @@ uint64_t runtime_process_time_counter() { return runtime_process_time_us() * 100
 uint64_t runtime_read_tsc() { return runtime_process_time_counter(); }
 int32_t* runtime_errno() { std::abort(); }
 int runtime_memory_write_backing(uintptr_t, const void*, uint64_t) { std::abort(); }
+int runtime_memory_is_mapped(uintptr_t, uint64_t) { return 1; }
+void runtime_report() { std::abort(); }
 }
 

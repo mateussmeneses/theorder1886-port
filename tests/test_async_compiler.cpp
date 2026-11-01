@@ -175,4 +175,54 @@ int main() {
         next.Wait();
         assert(next.Poll() == true);
     }
+    {
+        // Pre-queuing multiple graphics pipeline jobs before blocking on the first visible draw
+        // allows all worker threads to execute pipeline builds concurrently.
+        AsyncCompiler compiler(4, 16);
+        std::atomic<int> active{0};
+        std::atomic<int> max_active{0};
+        std::promise<void> all_running, release;
+        auto gate = release.get_future().share();
+        AsyncJob<int> jobs[4];
+        for (int i = 0; i < 4; ++i) {
+            assert(jobs[i].Start(compiler, [&, i] {
+                const int cur = active.fetch_add(1) + 1;
+                int prev = max_active.load();
+                while (prev < cur && !max_active.compare_exchange_weak(prev, cur)) {}
+                if (cur == 4) {
+                    all_running.set_value();
+                }
+                gate.wait();
+                active.fetch_sub(1);
+                return i + 1;
+            }));
+        }
+        all_running.get_future().wait();
+        assert(max_active.load() == 4);
+        release.set_value();
+        for (int i = 0; i < 4; ++i) {
+            jobs[i].Wait();
+            assert(jobs[i].Poll() == i + 1);
+        }
+        compiler.Stop();
+    }
+    {
+        // Fair queue: a long stream of urgent tasks (> 8) yields a slot to a waiting normal task
+        // so background pipeline builds never starve completely.
+        AsyncCompiler compiler(1, 32);
+        std::promise<void> entered, release;
+        auto gate = release.get_future().share();
+        std::vector<int> order;
+        assert(compiler.Submit([&] { entered.set_value(); gate.wait(); }));
+        entered.get_future().wait();
+        assert(compiler.Submit([&] { order.push_back(100); }, false));
+        for (int i = 1; i <= 10; ++i) {
+            assert(compiler.Submit([&, i] { order.push_back(i); }, true));
+        }
+        release.set_value();
+        compiler.Stop();
+        assert(order.size() == 11);
+        // The normal task (100) runs after the 8-task urgent burst, before urgent tasks 9 and 10.
+        assert(order[8] == 100);
+    }
 }

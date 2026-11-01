@@ -128,11 +128,10 @@ using BufferResourceList = boost::container::static_vector<BufferResource, NUM_B
 // https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/19779e291dda6545961469046430b93b5505e801
 // The Order's particle/point-light compute shader has 16 unrolled lights. Descriptor
 // words for unused lights can contain stale addresses and create unique specializations.
-// Experimental until a matched CUSA00035 frame/compile A/B: enable with
-// THEORDER_POINT_LIGHT_GUARD=1 (unset / 0 leaves the existing behavior unchanged).
+// Enabled by default; set THEORDER_POINT_LIGHT_GUARD=0 for A/B comparison.
 inline bool g_point_light_guard = [] {
     const char* value = std::getenv("THEORDER_POINT_LIGHT_GUARD");
-    return value && value[0] == '1' && value[1] == '\0';
+    return !value || value[0] != '0';
 }();
 
 template <typename InfoT>

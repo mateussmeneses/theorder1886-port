@@ -153,6 +153,64 @@ int main() {
     // 5. PartialHeightViews toggle default.
     assert(!PortToggle::Disabled(PortToggle::PartialHeightViews));
 
-    std::puts("shader resource / sampler clamping / mip binding / empty program guard OK");
+    // 6. TOport point-light guard: only descriptor slots proven unread are nulled.
+    {
+        const bool previous = g_point_light_guard;
+        g_point_light_guard = true;
+        Info info{};
+        info.pgm_hash = 0x804aeead;
+        info.flattened_ud_buf.resize(708);
+        auto& flat = info.flattened_ud_buf;
+        flat[657] = 2; // two live lights
+        flat[655] = 1; // only light 0 has a live secondary image
+
+        AmdGpu::Image valid{};
+        valid.base_address = 0x1000u;
+        valid.width = 63;
+        valid.height = 63;
+        valid.type = static_cast<u64>(AmdGpu::ImageType::Color2D);
+        valid.data_format = static_cast<u64>(AmdGpu::DataFormat::Format8_8_8_8);
+        valid.num_format = static_cast<u64>(AmdGpu::NumberFormat::Unorm);
+        valid.base_level = 0;
+        valid.last_level = 0;
+
+        auto at = [&](u32 offset) {
+            ImageResource resource{};
+            resource.sharp_fetch.summary = SharpFetch<AmdGpu::Image>::Summary::SingleLoad;
+            resource.sharp_fetch.offsets[0] = offset;
+            std::memcpy(flat.data() + offset, &valid, sizeof(valid));
+            return resource;
+        };
+        const auto first0 = at(68);
+        const auto first1 = at(76);
+        const auto first2 = at(84);
+        const auto second0 = at(196);
+        const auto second1 = at(204);
+        const auto second2 = at(212);
+
+        assert(first0.GetSharp(info).Address() == valid.Address());
+        assert(first1.GetSharp(info).Address() == valid.Address());
+        assert(first2.GetSharp(info).Address() == 0);
+        assert(second0.GetSharp(info).Address() == valid.Address());
+        assert(second1.GetSharp(info).Address() == 0);
+        assert(second2.GetSharp(info).Address() == 0);
+
+        flat[655] = 3; // light 1 secondary image becomes live
+        assert(second1.GetSharp(info).Address() == valid.Address());
+        flat[657] = 3; // light 2 first image becomes live
+        assert(first2.GetSharp(info).Address() == valid.Address());
+
+        info.pgm_hash = 0x1234; // all other shaders remain unchanged
+        assert(second2.GetSharp(info).Address() == valid.Address());
+        info.pgm_hash = 0x804aeead;
+        flat.resize(707); // unfamiliar SRT layout stays unchanged
+        assert(second2.GetSharp(info).Address() == valid.Address());
+        flat.resize(708);
+        g_point_light_guard = false; // rollback restores original descriptor
+        assert(second2.GetSharp(info).Address() == valid.Address());
+        g_point_light_guard = previous;
+    }
+
+    std::puts("shader resource / sampler clamping / mip binding / empty program guard / point-light guard OK");
     return EXIT_SUCCESS;
 }

@@ -1,5 +1,57 @@
 # Graphics regression checkpoint
 
+## 2026-11-01: comprehensive graphics fidelity, temporal stability, and VRAM management investigation (Prompts 4, 5, 6 & 7)
+
+Comprehensive investigation and remediation of graphics fidelity regressions, flickering, incorrect shadows, unstable lighting, temporal reprojection jitter, and resource management across the 12 mandatory investigation areas comparing `theorder1886-port` against `TOport` (reference checkout at `ceebdf3`). Changes are isolated into six independent PR branches with dedicated A/B rollback environment variables.
+
+### 12-Area Investigation & Root-Cause Analysis Matrix
+
+| # | Investigation Area | Root Cause & Differential Analysis vs TOport | Resolution & Validation | Rollback / Gate Flag |
+|---|--------------------|----------------------------------------------|-------------------------|----------------------|
+| 1 | **Depth buffers and depth/stencil** | `THEORDER_REDRAW_DEPTH_BIAS` defaulted to `128.0f` on non-writing `LessEqual` draws. As proven in TOport commit `e825344`, applying universal depth bias on non-writing depth draws introduces severe black polygonal tearing and horizontal streaks across environment geometry. | Defaulted `THEORDER_REDRAW_DEPTH_BIAS` to `0.0f`. Character face passes remain protected via dedicated `BbFaceDepth`. Validated in `tests/test_depth_stencil_state.cpp`. | `THEORDER_REDRAW_DEPTH_BIAS=128.0` |
+| 2 | **EVSM, HTILE and shadow maps** | HTILE compressed metadata buffer ranges were left untouched during full depth writes in `BeginRenderingFull`. Subsequent compute passes (`0x8ea0ef5b`, `0x9846aaff`) read stale HTILE compression tiles, treating valid depth as cleared. | Implemented `MarkRangeUncompressed` on active depth buffers with HTILE addresses during `BeginRenderingFull`. | `THEORDER_HTILE_DRAW_EXPAND=0` |
+| 3 | **Depth aliasing and image synchronization** | The Order samples multisampled depth (`D32_SFLOAT`, 2x/4x) through packed color views (`R32G32_SFLOAT`, `R32G32B32A32_SFLOAT`) in resolve passes. Upstream shadps4 rejected this in `CanCopyColorAndDepth` or attempted invalid color attachment bindings. In `TextureCache::ResolveDepthOverlap`, copy failures leaked `new_image_id` without freeing, corrupting page tables. | Added bit-preserving depth-to-color blits (`PlanDepthAliasCopy`, `ms_depth_to_color_frag`) and explicit `FreeImage(new_image_id)` on copy failure. Validated in `tests/test_depth_alias_copy.cpp`. | `THEORDER_DEPTH_ALIAS_FIX=0` |
+| 4 | **Redraw depth bias** | Non-writing depth passes on environment meshes caused visual z-fighting and black geometry tears when biased globally. | Defaulted redraw depth bias to `0.0f` (see Area 1). | `THEORDER_REDRAW_DEPTH_BIAS=128.0` |
+| 5 | **Shader resource binding** | Speculative SRT walker accessed guest buffers across camera cut transitions where live pointer tables differed from disk templates, risking invalid descriptor bindings. | SRT buffer reads protected; pipeline compilation snapshots guest memory states at draw time. | `THEORDER_PREQUEUE_SUBMISSION_PIPELINES=0` |
+| 6 | **MSAA and resolve** | Resolving multisampled depth to color textures resulted in black or clipped resolve textures. | Bit-preserving multisample depth-to-color fragment blits transfer raw sample bits bit-identically into color channels. | `THEORDER_DEPTH_ALIAS_FIX=0` |
+| 7 | **Vulkan image formats** | Depth textures reinterpreted as color formats (`D32_SFLOAT` -> `R32G32_SFLOAT` / `R32G32B32A32_SFLOAT`) failed format compatibility checks without dedicated alias blits. | Resolved by `PlanDepthAliasCopy`. | `THEORDER_DEPTH_ALIAS_FIX=0` |
+| 8 | **FMask, CMask and metadata** | Missing HTILE uncompressed markings caused shadow passes to sample uninitialized depth tiles. | HTILE expansion resolves stale metadata state (see Area 2). | `THEORDER_HTILE_DRAW_EXPAND=0` |
+| 9 | **Read/write barriers and CPU/GPU sync** | Sunlight luminance & auto-exposure compute shaders (`0x7550d841`, `0x7b1b18c9`) write to host-visible buffer pages also dirtied by the guest CPU. CPU write-watch invalidation discarded GPU writes, feeding 0s into engine exposure logic and causing total whiteout or pitch-black screens (#43, #47). | Implemented `KeepPageSynchronized`, `RecordSunCopies`, and `DeliverSunCopies` to ensure CPU readbacks receive valid exposure data. | `THEORDER_SUN_READBACK_SYNC=0` |
+| 10 | **Render targets and final composition** | Shaders converting reduced `FragCoord` to guest pixels assumed 1920x1080 raster size, whereas the retail game renders in 1920x800 cinema scope. This compressed `FragCoord.y` factors, causing vertical distortion and reprojection skew. | Set `GameSize()` to 1920x800 and adjusted `push_data.scene_size` in `vk_rasterizer.cpp` to `800 / scene.height`. Validated in `tests/test_scene_resolution.cpp`. | `THEORDER_SCENE_LETTERBOX=0` |
+| 11 | **Particles, transparencies, and lighting** | Speculative background worker compilation of 9 facial shaders (`0x193274a4`, `0x0e4fee1c`, `0xf049dbf2`, `0x418001f4`, `0xf5c17eec`, `0x39e98e7c`, `0xdc16510f`, `0x02108015`, `0x0a54a188`) caused missing facial textures and dark geometry upon camera cuts (#68, #63). UI point-samplers at 1440p/4K caused severe icon flickering and shimmering. | Facial shaders are guarded against background worker specialization (`THEORDER_FACE_WORKERS=0`), compiling synchronously on the GPU thread. UI point-samplers are promoted to Bilinear during UI rendering phase. Validated in `tests/test_face_workers_guard.cpp`. | `THEORDER_FACE_WORKERS=1`, `THEORDER_UI_BILINEAR=0` |
+| 12 | **Numerical precision & VRAM lifecycle** | Unbounded pipeline binary disk and memory caching bloated cache directories and exhausted host memory over long sessions. Stale `.tmp` writes accumulated on disk. | Added `TrimPipelineBinaries(directory, budget_bytes)` (default 4096 MB) using LRU file modification timestamps and cleaning orphaned `.tmp` files. Validated in `tests/test_pipeline_binary_trim.cpp`. | `THEORDER_PIPELINE_BINARY_CACHE_MB=0` |
+
+### Independent PR Branches Delivered
+
+1. `fix/gfx-redraw-depth-bias-default` (commit `87e33e0`):
+   - Default `THEORDER_REDRAW_DEPTH_BIAS` to `0.0f` (was `128.0f`), matching TOport commit `e825344`.
+   - Eliminates black geometry tearing and horizontal streaks across environment meshes.
+   - Dedicated unit test in `tests/test_depth_stencil_state.cpp`.
+2. `fix/gfx-depth-alias-and-overlap` (commit `77a5c13`):
+   - Bit-preserving depth-to-color MSAA alias copies (`PlanDepthAliasCopy`, `ms_depth_to_color_frag`).
+   - Fixes critical image leak and page table desync in `TextureCache::ResolveDepthOverlap` on copy failure.
+   - Dedicated unit test in `tests/test_depth_alias_copy.cpp`.
+3. `fix/gfx-sun-readback-sync-and-htile` (commit `7cf7979`):
+   - Exposure/sunlight luminance buffer synchronization (`0x7550d841`, `0x7b1b18c9`) resolving whiteout and pitch-black screens (#43, #47).
+   - HTILE buffer range uncompressed expansion on depth write in `BeginRenderingFull`.
+4. `fix/gfx-face-workers-and-compute-recurring` (commit `d31feb8`):
+   - Guards 9 facial shaders against background worker specialization across camera cuts.
+   - Preserves facial textures and prevents missing geometry transitions.
+   - Dedicated unit test in `tests/test_face_workers_guard.cpp`.
+5. `fix/gfx-scene-resolution-1920x800` (commit `d4b69c8`):
+   - Sets `GameSize()` to 1920x800 retail cinema scope and corrects `FragCoord.y` factor conversion.
+   - Eliminates temporal reprojection skew in TAA, DLSS, and FSR.
+   - Promotes UI point-samplers to Bilinear during UI rendering phase to eliminate high-res HUD shimmering.
+   - Dedicated unit test in `tests/test_scene_resolution.cpp`.
+6. `fix/mem-vram-pipeline-binary-trim-and-srt` (commit `431ca76`):
+   - LRU trimming of pipeline binary cache to `THEORDER_PIPELINE_BINARY_CACHE_MB` (4096 MB).
+   - Cleans up stale `.tmp` partial cache writes and bounds memory usage over extended play sessions.
+   - Dedicated unit test in `tests/test_pipeline_binary_trim.cpp`.
+7. `integrate/gfx-and-temporal-fidelity-combined` (commit `bd8befe`):
+   - Clean combination of all 6 PR branches for integrated testing without auto-merging to `master`.
+   - All 54 GPU/CPU tests pass.
+
+
 ## 2026-10-28: capture-based black-screen stage diagnosis (draft PR)
 
 Issues #43/#47 describe audio, subtitles/HUD and a black gameplay scene

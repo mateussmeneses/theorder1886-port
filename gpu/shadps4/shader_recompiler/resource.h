@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstddef>
+#include <cstdlib>
 
 #include "common/types.h"
 #include "shader_recompiler/ir/type.h"
@@ -123,6 +124,38 @@ struct BufferResource {
 };
 using BufferResourceList = boost::container::static_vector<BufferResource, NUM_BUFFERS>;
 
+// Adapted from TOport v0.1.5 (Igor Augusto and contributors), GPL-2.0-or-later:
+// https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/19779e291dda6545961469046430b93b5505e801
+// The Order's particle/point-light compute shader has 16 unrolled lights. Descriptor
+// words for unused lights can contain stale addresses and create unique specializations.
+// Experimental until a matched CUSA00035 frame/compile A/B: enable with
+// THEORDER_POINT_LIGHT_GUARD=1 (unset / 0 leaves the existing behavior unchanged).
+inline bool g_point_light_guard = [] {
+    const char* value = std::getenv("THEORDER_POINT_LIGHT_GUARD");
+    return value && value[0] == '1' && value[1] == '\0';
+}();
+
+template <typename InfoT>
+bool PointLightImageUnread(const InfoT& info, u32 sharp_offset) {
+    if (!g_point_light_guard || info.pgm_hash != 0x804aeead) {
+        return false;
+    }
+    const auto flat = info.FlatUserData();
+    if (flat.size() != 708) {
+        return false; // Guard table only validated for this layout.
+    }
+    const u32 count = flat[657];
+    const u32 mask = flat[655];
+    if (sharp_offset >= 68 && sharp_offset < 196 && (sharp_offset - 68) % 8 == 0) {
+        return (sharp_offset - 68) / 8 >= count;
+    }
+    if (sharp_offset >= 196 && sharp_offset < 324 && (sharp_offset - 196) % 8 == 0) {
+        const u32 light = (sharp_offset - 196) / 8;
+        return light >= count || ((mask >> light) & 1u) == 0;
+    }
+    return false;
+}
+
 enum class MipStorageFallbackMode : u16 {
     None,
     DynamicIndex,
@@ -150,6 +183,9 @@ struct ImageResource {
     constexpr AmdGpu::Image GetSharp(const auto& info) const noexcept {
         AmdGpu::Image image{};
         if (!Fetch(info.FlatUserData().data(), &image)) {
+            return AmdGpu::Image::Null(is_depth);
+        }
+        if (PointLightImageUnread(info, sharp_fetch.offsets[0])) {
             return AmdGpu::Image::Null(is_depth);
         }
         if (post_op == SharpFetchPostOp::ConvertCubeTo2DArray) {

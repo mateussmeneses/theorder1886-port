@@ -2189,6 +2189,10 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             return {};
         }
         const Program* program = found_program->second.get();
+        if (!FaceWorkersAllowed() && IsFaceShader(program->info.pgm_hash)) {
+            worker.failed = true;
+            return {};
+        }
         auto [it_info, new_info] = worker.infos.try_emplace(program, *program->info_template);
         auto& info = it_info->second;
         info.pgm_base = params.Base();

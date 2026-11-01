@@ -260,6 +260,22 @@ public:
         return last_pending_key;
     }
 
+    [[nodiscard]] static bool IsFaceShader(u64 pgm_hash) noexcept {
+        static constexpr u64 FaceShaders[] = {0x193274a4, 0x0e4fee1c, 0xf049dbf2, 0x418001f4,
+                                              0xf5c17eec, 0x39e98e7c, 0xdc16510f, 0x02108015,
+                                              0x0a54a188};
+        return std::ranges::find(FaceShaders, pgm_hash) != std::end(FaceShaders);
+    }
+
+    [[nodiscard]] static bool FaceWorkersAllowed() noexcept {
+        static const bool face_workers = [] {
+            const char* env = std::getenv("THEORDER_FACE_WORKERS");
+            if (!env) env = std::getenv("BB_FACE_WORKERS");
+            return env && env[0] == '1';
+        }();
+        return face_workers;
+    }
+
     /// port: worker side of draw preparation: selects the pipeline key for `sel.regs` without
     /// creating anything. False when a program or permutation does not exist yet.
     bool PrepareGraphicsPipeline(PipelineSelection& sel);

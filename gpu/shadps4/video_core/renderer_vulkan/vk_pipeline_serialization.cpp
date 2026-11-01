@@ -293,10 +293,12 @@ std::optional<std::vector<PipelineBinaryCache::Binary>> LoadLegacyBinary(
 // came back under new indices every session left 41 GB of them. The most recently used are
 // kept within THEORDER_PIPELINE_BINARY_CACHE_MB (default 4096): beyond it the oldest go, down to
 // three quarters of it. Temporary files of writes cut short go too.
-static void TrimPipelineBinaries(const std::filesystem::path& directory) {
-    u64 budget = u64{4096} << 20;
-    if (const char* env = std::getenv("THEORDER_PIPELINE_BINARY_CACHE_MB")) {
-        budget = std::strtoull(env, nullptr, 10) << 20;
+size_t TrimPipelineBinaries(const std::filesystem::path& directory, u64 budget_bytes) {
+    u64 budget = budget_bytes ? budget_bytes : (u64{4096} << 20);
+    if (!budget_bytes) {
+        if (const char* env = std::getenv("THEORDER_PIPELINE_BINARY_CACHE_MB")) {
+            budget = std::strtoull(env, nullptr, 10) << 20;
+        }
     }
     using Clock = std::filesystem::file_time_type::clock;
     const auto stale_temp = Clock::now() - std::chrono::minutes(10);
@@ -326,7 +328,7 @@ static void TrimPipelineBinaries(const std::filesystem::path& directory) {
         files.push_back({time, size, it->path()});
     }
     if (total <= budget) {
-        return;
+        return 0;
     }
     const u64 before = total;
     std::ranges::sort(files, {}, &File::time);
@@ -345,6 +347,7 @@ static void TrimPipelineBinaries(const std::filesystem::path& directory) {
                 static_cast<unsigned long long>(before >> 20),
                 static_cast<unsigned long long>(budget >> 20), removed,
                 static_cast<unsigned long long>(total >> 20));
+    return removed;
 }
 
 void ReportPipelineBinaryCache() {

@@ -43,6 +43,7 @@ vk::ResultValue<vk::UniquePipeline> CreateCachedComputePipeline(
     vk::Device device, vk::PipelineCache cache, const vk::ComputePipelineCreateInfo& info,
     const ComputePipelineKey& key, const vk::PipelineBinaryKeyKHR& global_key,
     const std::filesystem::path& directory);
+size_t TrimPipelineBinaries(const std::filesystem::path& directory, u64 budget_bytes = 0);
 void ReportPipelineBinaryCache();
 
 void RegisterPipelineData(const ComputePipelineKey& key,

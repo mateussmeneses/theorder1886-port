@@ -284,6 +284,20 @@ if (WIN32)
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(pipeline-binary-trim-test EXCLUDE_FROM_ALL ../tests/test_pipeline_binary_trim.cpp
+    ../tests/test_gpu_runtime_stubs.cpp)
+target_compile_definitions(pipeline-binary-trim-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_include_directories(pipeline-binary-trim-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(pipeline-binary-trim-test PRIVATE theordergpu)
+target_compile_options(pipeline-binary-trim-test PRIVATE -fPIC)
+if (WIN32)
+    target_sources(pipeline-binary-trim-test PRIVATE ../src/compat_win.c)
+    target_compile_definitions(pipeline-binary-trim-test PRIVATE sigjmp_buf=port_jmp_buf)
+    target_compile_options(pipeline-binary-trim-test PRIVATE
+        -include ${CMAKE_CURRENT_SOURCE_DIR}/../src/compat_win.h)
+    target_link_libraries(pipeline-binary-trim-test PRIVATE onecore)
+endif()
+
 add_executable(pipeline-binary-cache-test EXCLUDE_FROM_ALL ../tests/test_pipeline_binary_cache.cpp
     ../tests/test_gpu_runtime_stubs.cpp)
 target_compile_definitions(pipeline-binary-cache-test PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

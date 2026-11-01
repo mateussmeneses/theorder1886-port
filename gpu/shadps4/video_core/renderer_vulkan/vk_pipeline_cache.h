@@ -379,8 +379,11 @@ private:
     };
     tsl::robin_map<u64, ComputeRuns> compute_runs;
     bool SkippableDispatch(const Shader::Info& info) const;
-    const ComputePipeline* FallbackComputePipeline(u64 pgm_hash);
+    const ComputePipeline* FallbackComputePipeline(
+        u64 pgm_hash, const Shader::StageSpecialization* spec_override = nullptr);
     void CountComputeRun(u64 pgm_hash);
+    u64 pending_compute_fallback_pgm = 0;
+    std::optional<Shader::StageSpecialization> pending_compute_fallback_spec;
     tsl::robin_map<size_t, std::unique_ptr<Program>> program_cache;
     std::vector<Program*> pending_programs;
     /// port: exclusive for program/permutation insertions, shared for worker lookups.

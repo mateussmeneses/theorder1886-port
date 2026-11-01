@@ -1579,7 +1579,18 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     PublishGraphics();
     PublishCompute();
     PumpWarmUp();
+    pending_compute_fallback_pgm = 0;
+    pending_compute_fallback_spec.reset();
     if (!RefreshComputeKey()) {
+        if (pending_compute_fallback_pgm != 0 && pending_compute_fallback_spec) {
+            const u64 pgm = pending_compute_fallback_pgm;
+            if (const auto* fallback = FallbackComputePipeline(pgm, &*pending_compute_fallback_spec)) {
+                ++g_port_fallback_dispatches;
+                CountComputeRun(pgm);
+                return fallback;
+            }
+            CountComputeRun(pgm);
+        }
         return nullptr;
     }
     const u64 pgm_hash = sel.infos[0]->pgm_hash;
@@ -1590,18 +1601,16 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         }
         return found->second.get();
     }
+    const bool can_async = SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
+                           !EmulatorSettings.IsShaderCollect() &&
+                           !sync_compute_keys.contains(compute_key.value);
     // A pipeline an earlier session built is restored in 1-2 ms: built here (GetGraphicsPipeline).
     const bool known = !sel.fresh_permutation && SyncBuildBudgetLeft() &&
                        !pending_compute.contains(compute_key) &&
                        Storage::DataBase::Instance().Exists(
                            Storage::BlobType::PipelineKey,
                            fmt::format("c_{:#018x}", compute_key.value));
-    // A skippable dispatch is redone every frame: skipping one costs nothing, so even a known
-    // pipeline builds in the background (a stored key may be another session's permutation at
-    // that index, and the driver then compiled it here: 0x804aeead, the particle lighting, 177 ms).
-    if ((!known || !PortToggle::Disabled(PortToggle::SyncBuildBudget)) &&
-        SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
-        !EmulatorSettings.IsShaderCollect() && !sync_compute_keys.contains(compute_key.value)) {
+    const auto build_in_background = [&]() -> const ComputePipeline* {
         static const bool log = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
         if (log && !pending_compute.contains(compute_key)) {
             LOG_WARNING(Render_Vulkan, "port: compute pipeline of {:#x} built in the background "
@@ -1635,7 +1644,11 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
             CountComputeRun(pgm_hash);
             return fallback;
         }
+        CountComputeRun(pgm_hash);
         return nullptr;
+    };
+    if (can_async && (pending_compute.contains(compute_key) || !known)) {
+        return build_in_background();
     }
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
@@ -1656,9 +1669,15 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         CompileTimer timer;
 
         ComputePipeline::SerializationSupport sdata{};
+        g_pipeline_restore_only = can_async;
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],
                                                        sel.modules[0], sdata, false);
+        g_pipeline_restore_only = false;
+        if (!it.value()->Handle()) {
+            compute_pipelines.erase(it);
+            return build_in_background();
+        }
         RegisterPipelineData(compute_key, sdata);
         ++num_new_pipelines;
 
@@ -1707,7 +1726,8 @@ std::optional<u32> ImageOnlyDifference(const Shader::StageSpecialization& a,
 // (Rasterizer::BindTextures). The Order's particle lighting (0x804aeead) samples ~30 slots whose
 // T#s change dimension and format with the lights in view: hundreds of permutations, ~40 new
 // ones each session, and every skipped dispatch was smoke and particles blinking.
-const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
+const ComputePipeline* PipelineCache::FallbackComputePipeline(
+    u64 pgm_hash, const Shader::StageSpecialization* spec_override) {
     if (PortToggle::Disabled(PortToggle::ComputeFallback)) {
         return nullptr;
     }
@@ -1716,19 +1736,30 @@ const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
         return nullptr;
     }
     const auto& modules = program->second->modules;
-    const auto current = std::ranges::find(modules, sel.modules[0], &Program::Module::module);
-    if (current == modules.end()) {
-        return nullptr;
+    const Shader::StageSpecialization* target_spec = spec_override;
+    size_t target_index = modules.size();
+    if (!target_spec) {
+        const auto current = std::ranges::find(modules, sel.modules[0], &Program::Module::module);
+        if (current == modules.end()) {
+            return nullptr;
+        }
+        target_spec = &current->spec;
+        target_index = std::distance(modules.begin(), current);
     }
     const ComputePipeline* best = nullptr;
     size_t best_index = 0;
     u32 best_count = ~0u;
     for (size_t i = 0; i < modules.size(); ++i) {
-        const auto found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, i)});
+        auto found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, i)});
+        if ((found == compute_pipelines.end() || !found->second) &&
+            modules[i].compute_pipeline_permutation) {
+            const size_t canonical = *modules[i].compute_pipeline_permutation;
+            found = compute_pipelines.find(ComputePipelineKey{HashCombine(pgm_hash, canonical)});
+        }
         if (found == compute_pipelines.end() || !found->second) {
             continue;
         }
-        if (const auto count = ImageOnlyDifference(current->spec, modules[i].spec);
+        if (const auto count = ImageOnlyDifference(*target_spec, modules[i].spec);
             count && *count < best_count) {
             best = found->second.get();
             best_index = i;
@@ -1742,15 +1773,15 @@ const ComputePipeline* PipelineCache::FallbackComputePipeline(u64 pgm_hash) {
         for (size_t i = 0; i < modules.size(); ++i) {
             if (compute_pipelines.contains(ComputePipelineKey{HashCombine(pgm_hash, i)})) {
                 ++built;
-                same_shape += modules[i].spec.images.size() == current->spec.images.size() &&
-                              modules[i].spec.buffers == current->spec.buffers &&
-                              modules[i].spec.samplers == current->spec.samplers &&
-                              modules[i].spec.bitset == current->spec.bitset;
+                same_shape += modules[i].spec.images.size() == target_spec->images.size() &&
+                              modules[i].spec.buffers == target_spec->buffers &&
+                              modules[i].spec.samplers == target_spec->samplers &&
+                              modules[i].spec.bitset == target_spec->bitset;
             }
         }
         LOG_WARNING(Render_Vulkan, "port: compute {:#x} permutation {}: {} of {} permutations "
                     "built, {} with the same buffers/samplers/bound set, fallback {}",
-                    pgm_hash, std::distance(modules.begin(), current), built, modules.size(),
+                    pgm_hash, target_index, built, modules.size(),
                     same_shape, best ? fmt::format("{} ({} images)", best_index, best_count)
                                      : std::string{"none"});
     }
@@ -1783,13 +1814,30 @@ bool PipelineCache::SkippableDispatch(const Shader::Info& info) const {
     if (mode == '0' || mode == '1') {
         return mode == '1';
     }
-    // A frame can go without the program (the guest flips one frame twice).
-    constexpr u32 MinFrames = 8, MaxIdleFlips = 4;
+    static const bool recurring_async = [] {
+        const char* env = std::getenv("THEORDER_RECURRING_COMPUTE_ASYNC");
+        return !env || env[0] != '0';
+    }();
     const auto runs = compute_runs.find(info.pgm_hash);
-    const u64 frame = PortStats::flips.load(std::memory_order_relaxed);
-    if (runs == compute_runs.end() || runs->second.frames < MinFrames ||
-        runs->second.last_frame + MaxIdleFlips < frame) {
+    if (runs == compute_runs.end()) {
         return false;
+    }
+    if (recurring_async) {
+        // Once a non-image-writing compute shader has executed in >= 3 distinct frames (matching
+        // TOport's RecurringMoments = 3), it is proven recurring and stays eligible for background
+        // compilation + FallbackComputePipeline even across brief menu/camera pauses.
+        constexpr u32 MinFrames = 3;
+        if (runs->second.frames < MinFrames) {
+            return false;
+        }
+    } else {
+        // A frame can go without the program (the guest flips one frame twice).
+        constexpr u32 MinFrames = 8, MaxIdleFlips = 4;
+        const u64 frame = PortStats::flips.load(std::memory_order_relaxed);
+        if (runs->second.frames < MinFrames ||
+            runs->second.last_frame + MaxIdleFlips < frame) {
+            return false;
+        }
     }
     return std::ranges::none_of(info.images, [](const auto& image) { return image.is_written; });
 }
@@ -2240,7 +2288,16 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     const bool compile_async = AsyncCompilation() && hw_stage != HwStage::Compute &&
                                !sel.regs->stage_enable.hs_en &&
                                !EmulatorSettings.IsShaderCollect();
-    if (!compile_async && it_pgm != program_cache.end() && it_pgm->second->HasPending()) {
+    static const bool recurring_compute_async = [] {
+        const char* env = std::getenv("THEORDER_RECURRING_COMPUTE_ASYNC");
+        return !env || env[0] != '0';
+    }();
+    const bool async_compute_perm =
+        recurring_compute_async && AsyncCompilation() && hw_stage == HwStage::Compute &&
+        !EmulatorSettings.IsShaderCollect() && it_pgm != program_cache.end() &&
+        !it_pgm->second->modules.empty() && SkippableDispatch(it_pgm->second->info);
+    if (!compile_async && !async_compute_perm && it_pgm != program_cache.end() &&
+        it_pgm->second->HasPending()) {
         {
             PhaseTimer waiting{g_port_compile_wait_ns};
             for (auto& pending_build : it_pgm->second->pending_builds) {
@@ -2333,6 +2390,10 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                   ? program->modules.begin() + program->last_used
                   : std::ranges::find(program->modules, spec, &Program::Module::spec);
     if (it != program->modules.end() && it->pending_compile) {
+        if (async_compute_perm) {
+            pending_compute_fallback_pgm = params.hash;
+            pending_compute_fallback_spec = it->spec;
+        }
         info.AddBindings(binding);
         return {};
     }
@@ -2344,17 +2405,28 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         program->last_used = std::distance(program->modules.begin(), it);
     }
     if (it == program->modules.end()) {
-        if ((!multi_perm && program->HasPending()) ||
-            std::ranges::find(program->failed_permutations, spec) !=
-                program->failed_permutations.end()) {
+        if (std::ranges::find(program->failed_permutations, spec) !=
+            program->failed_permutations.end()) {
             info.AddBindings(binding);
             return {};
         }
-        if (compile_async) {
+        if ((!multi_perm && program->HasPending()) || program->HasPendingPermutation(spec)) {
+            if (async_compute_perm) {
+                pending_compute_fallback_pgm = params.hash;
+                pending_compute_fallback_spec = std::move(spec);
+            }
+            info.AddBindings(binding);
+            return {};
+        }
+        if (compile_async || async_compute_perm) {
             if (!program->modules.empty()) {
                 LogNewPermutation(params.hash, perm_idx, spec,
                                   program->modules[std::min(program->last_used,
                                                             program->modules.size() - 1)].spec);
+            }
+            if (async_compute_perm) {
+                pending_compute_fallback_pgm = params.hash;
+                pending_compute_fallback_spec = spec;
             }
             QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, perm_idx, false,
                         std::move(spec));

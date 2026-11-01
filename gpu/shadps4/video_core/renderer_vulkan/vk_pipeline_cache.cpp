@@ -1055,7 +1055,6 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
         if (prioritize) {
             build->job.Prioritize(*compiler);
         }
-        PrequeueUpcomingPipelines();
         while (!build->job.Poll() && !build->job.Failed() && !pending_programs.empty()) {
             auto* front_pgm = pending_programs.front();
             if (!front_pgm->pending) {
@@ -1063,9 +1062,6 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
             }
             front_pgm->pending->job.Wait();
             PublishShaders();
-            if (pending_programs.empty()) {
-                PrequeueUpcomingPipelines();
-            }
         }
         build->job.Wait();
     }
@@ -1245,178 +1241,131 @@ void PipelineCache::RecordDeferredSelection(const PipelineSelection& s) {
         const char* env = std::getenv("THEORDER_PREQUEUE_SUBMISSION_PIPELINES");
         return !env || env[0] != '0';
     }();
-    if (!prequeue || !s.regs || s.regs->stage_enable.hs_en || deferred_selections.size() >= 32) {
+    if (!prequeue || !s.key_complete || s.worker || !s.regs || s.regs->stage_enable.hs_en ||
+        deferred_selections.size() >= 64) {
         return;
     }
-    const auto& regs = *s.regs;
-    u64 sig = u64(regs.stage_enable.raw) ^ (u64(regs.color_target_mask.raw) << 8);
-    if (const auto* ps = regs.ProgramForStage(u32(HwStage::Fragment)); ps && ps->Address<u32*>()) {
-        sig ^= HashCombine(AmdGpu::GetParams(*ps).hash, 1);
+    bool has_stage = false;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (s.infos[i]) {
+            if (!s.stage_programs[i]) {
+                return;
+            }
+            has_stage = true;
+        }
     }
-    if (const auto* vs = regs.ProgramForStage(u32(HwStage::Vertex)); vs && vs->Address<u32*>()) {
-        sig ^= HashCombine(AmdGpu::GetParams(*vs).hash, 2);
+    if (!has_stage || graphics_pipelines.contains(s.graphics_key) ||
+        pending_graphics.contains(s.graphics_key) ||
+        (!failed_graphics.empty() && failed_graphics.contains(s.graphics_key))) {
+        return;
     }
     for (const auto& existing : deferred_selections) {
-        if (existing.signature == sig) {
+        if (existing->selection.graphics_key == s.graphics_key) {
             return;
         }
     }
-    std::unique_ptr<AmdGpu::Regs> regs_copy;
-    if (!deferred_regs_pool.empty()) {
-        regs_copy = std::move(deferred_regs_pool.back());
-        deferred_regs_pool.pop_back();
-    } else {
-        regs_copy = std::make_unique<AmdGpu::Regs>();
+    PhaseTimer capture{g_port_snapshot_ns};
+    auto build = std::make_shared<AsyncGraphicsCompilation>();
+    build->selection = s;
+    build->selection.regs = nullptr;
+    build->live_infos = s.infos;
+    for (u32 i = 0; i < MaxShaderStages; ++i) {
+        if (s.infos[i]) {
+            build->infos[i] = std::make_unique<Shader::Info>(*s.infos[i]);
+            build->user_data[i].assign(s.infos[i]->user_data.begin(), s.infos[i]->user_data.end());
+            build->infos[i]->user_data = build->user_data[i];
+            build->selection.infos[i] = build->infos[i].get();
+            build->fetch[i].Capture(*build->infos[i]);
+        }
     }
-    *regs_copy = regs;
-    deferred_selections.push_back({sig, std::move(regs_copy), s.draw_indirect_params});
+    deferred_selections.push_back(std::move(build));
 }
 
 void PipelineCache::DrainDeferredSelections() {
-    if (draining_deferred || deferred_selections.empty() || !AsyncCompilation() ||
+    if (draining_deferred || deferred_selections.empty() || !compiler ||
+        !PortSettings::Get().async_shaders.load(std::memory_order_relaxed) ||
         EmulatorSettings.IsShaderCollect()) {
         return;
     }
     draining_deferred = true;
     SCOPE_EXIT { draining_deferred = false; };
-    PipelineSelection def_sel{};
-    for (size_t i = 0; i < deferred_selections.size();) {
-        auto& entry = deferred_selections[i];
-        def_sel.regs = entry.regs.get();
-        def_sel.draw_indirect_params = entry.params;
-        if (RefreshGraphicsKey(def_sel)) {
-            const bool is_stored = Storage::DataBase::Instance().Exists(
-                Storage::BlobType::PipelineKey,
-                fmt::format("g_{:#018x}", std::hash<GraphicsPipelineKey>{}(def_sel.graphics_key)));
-            const bool is_known = !def_sel.fresh_permutation && SyncBuildBudgetLeft() && is_stored;
-            if ((failed_graphics.empty() || !failed_graphics.contains(def_sel.graphics_key)) &&
-                !graphics_pipelines.contains(def_sel.graphics_key) && !is_known) {
-                QueueGraphicsBuild(def_sel, true);
-            }
-            deferred_regs_pool.push_back(std::move(entry.regs));
-            deferred_selections[i] = std::move(deferred_selections.back());
-            deferred_selections.pop_back();
-        } else if (!def_sel.compilation_pending) {
-            deferred_regs_pool.push_back(std::move(entry.regs));
-            deferred_selections[i] = std::move(deferred_selections.back());
-            deferred_selections.pop_back();
-        } else {
-            ++i;
-        }
-    }
-}
-
-void PipelineCache::PrequeueUpcomingPipelines() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("THEORDER_PREQUEUE_SUBMISSION_PIPELINES");
-        return !env || env[0] != '0';
+    static const bool reuse_stage = [] {
+        const char* env = std::getenv("THEORDER_STAGE_CONTENT_REUSE");
+        return !env || *env != '0';
     }();
-    if (!enabled || prequeue_active || !liverpool || !AsyncCompilation() ||
-        EmulatorSettings.IsShaderCollect()) {
-        return;
-    }
-    prequeue_active = true;
-    SCOPE_EXIT { prequeue_active = false; };
-    if (!prequeue_regs) {
-        prequeue_regs = std::make_unique<AmdGpu::Regs>();
-    }
-    *prequeue_regs = liverpool->regs;
-    PipelineSelection pre_sel{};
-    pre_sel.regs = prequeue_regs.get();
-    u64 dummy_checksum = 0;
-    u32 draws_scanned = 0;
-    constexpr u32 MaxDrawsScanned = 256;
-
-    const auto inspect_draw = [&] {
-        if (draws_scanned >= MaxDrawsScanned || SmallTargetDraw(*prequeue_regs) ||
-            prequeue_regs->stage_enable.hs_en) {
-            return;
-        }
-        ++draws_scanned;
-        pre_sel.draw_indirect_params = {};
-        if (!RefreshGraphicsKey(pre_sel)) {
-            if (pre_sel.compilation_pending) {
-                RecordDeferredSelection(pre_sel);
-            }
-            return;
-        }
-        if ((!failed_graphics.empty() && failed_graphics.contains(pre_sel.graphics_key)) ||
-            graphics_pipelines.contains(pre_sel.graphics_key) ||
-            pending_graphics.contains(pre_sel.graphics_key)) {
-            return;
-        }
-        const bool is_stored = Storage::DataBase::Instance().Exists(
-            Storage::BlobType::PipelineKey,
-            fmt::format("g_{:#018x}", std::hash<GraphicsPipelineKey>{}(pre_sel.graphics_key)));
-        if (!pre_sel.fresh_permutation && SyncBuildBudgetLeft() && is_stored) {
-            return;
-        }
-        QueueGraphicsBuild(pre_sel, true);
-    };
-
-    const auto walk_span = [&](auto& self, std::span<const u32> cmds, u32 depth) -> bool {
-        for (size_t at = 0; at < cmds.size() && draws_scanned < MaxDrawsScanned;) {
-            const auto* header = reinterpret_cast<const AmdGpu::PM4Header*>(cmds.data() + at);
-            if (header->type == 2) {
-                ++at;
+    for (size_t i = 0; i < deferred_selections.size();) {
+        auto& build = deferred_selections[i];
+        auto& def_sel = build->selection;
+        bool still_pending = false;
+        bool aborted = false;
+        for (u32 stage = 0; stage < MaxShaderStages; ++stage) {
+            Program* pgm = def_sel.stage_programs[stage];
+            if (!pgm) {
                 continue;
             }
-            if (header->type != 3) {
-                return false;
-            }
-            const size_t words = header->type3.NumWords() + 1;
-            if (at + words > cmds.size()) {
-                return false;
-            }
-            const auto opcode = header->type3.opcode;
-            AmdGpu::Liverpool::ApplyGraphicsRegisterPacket(*prequeue_regs, header, dummy_checksum);
-            using AmdGpu::PM4ItOpcode;
-            if (opcode == PM4ItOpcode::Rewind) {
-                const auto* rewind = reinterpret_cast<const AmdGpu::PM4CmdRewind*>(header);
-                if (!rewind->Valid()) {
-                    return false;
-                }
-            } else if (opcode == PM4ItOpcode::CondExec) {
-                const auto* cond_exec = reinterpret_cast<const AmdGpu::PM4CmdCondExec*>(header);
-                if (*cond_exec->Address() == false) {
-                    const size_t skip_words = words + cond_exec->exec_count.Value();
-                    if (at + skip_words > cmds.size()) {
-                        return false;
-                    }
-                    at += skip_words;
-                    continue;
-                }
-            } else if (opcode == PM4ItOpcode::IndirectBuffer && depth < 2) {
-                const auto* ib = reinterpret_cast<const AmdGpu::PM4CmdIndirectBuffer*>(header);
-                if (ib->ib_size > 0 && ib->ib_size <= 262144 && ib->Address<const u32*>()) {
-                    if (!self(self, {ib->Address<const u32>(), ib->ib_size}, depth + 1)) {
-                        return false;
-                    }
-                }
-            } else if (opcode == PM4ItOpcode::DrawIndex2 ||
-                       opcode == PM4ItOpcode::DrawIndexOffset2 ||
-                       opcode == PM4ItOpcode::DrawIndexAuto) {
-                inspect_draw();
-            }
-            at += words;
-        }
-        return true;
-    };
-
-    const auto rem_dcbs = liverpool->RemainingDcbs();
-    for (size_t d = rem_dcbs.size(); d-- > 0;) {
-        if (!rem_dcbs[d].empty() && !walk_span(walk_span, rem_dcbs[d], u32(d))) {
-            return;
-        }
-    }
-    if (draw_prep && draws_scanned < MaxDrawsScanned) {
-        std::vector<std::vector<u32>> upcoming;
-        draw_prep->CopyUpcomingCommands(upcoming);
-        for (const auto& buf : upcoming) {
-            if (!walk_span(walk_span, buf, 0)) {
+            const size_t perm_idx = def_sel.stage_perm_indices[stage];
+            if (pgm->compilation_failed || perm_idx >= pgm->modules.size()) {
+                aborted = true;
                 break;
             }
+            const auto& mod_entry = pgm->modules[perm_idx];
+            if (mod_entry.pending_compile) {
+                still_pending = true;
+                continue;
+            }
+            if (!mod_entry.module) {
+                aborted = true;
+                break;
+            }
+            def_sel.modules[stage] = mod_entry.module;
+            const size_t canonical =
+                reuse_stage && !EmulatorSettings.IsPatchShaders() &&
+                        !EmulatorSettings.IsShaderCollect()
+                    ? pgm->StagePipelinePermutation(perm_idx)
+                    : perm_idx;
+            def_sel.graphics_key.stage_hashes[stage] = HashCombine(pgm->info.pgm_hash, canonical);
+            def_sel.fresh_permutation |= pgm->modules[canonical].fresh;
         }
+        if (aborted) {
+            deferred_selections[i] = std::move(deferred_selections.back());
+            deferred_selections.pop_back();
+            continue;
+        }
+        if (still_pending) {
+            ++i;
+            continue;
+        }
+        const auto& key = def_sel.graphics_key;
+        const bool is_stored = Storage::DataBase::Instance().Exists(
+            Storage::BlobType::PipelineKey,
+            fmt::format("g_{:#018x}", std::hash<GraphicsPipelineKey>{}(key)));
+        const bool is_known = !def_sel.fresh_permutation && SyncBuildBudgetLeft() && is_stored;
+        if ((failed_graphics.empty() || !failed_graphics.contains(key)) &&
+            !graphics_pipelines.contains(key) && !pending_graphics.contains(key) && !is_known &&
+            compiler->HasCapacity()) {
+            const bool urgent = !def_sel.fresh_permutation && is_stored;
+            const bool queued = build->job.Start(
+                *compiler,
+                [this, build] {
+                    Shader::Gcn::ScopedFetchShaderSnapshot snapshot{
+                        build->fetch[u32(SwStage::Vertex)]};
+                    PhaseTimer compile{g_port_async_ns};
+                    auto& sel_snap = build->selection;
+                    build->pipeline = std::make_unique<GraphicsPipeline>(
+                        instance, scheduler, desc_heap, profile, sel_snap.graphics_key,
+                        *worker_pipeline_caches[AsyncCompiler::WorkerIndex()], sel_snap.infos,
+                        sel_snap.runtime_infos,
+                        sel_snap.fetch_shader ? &*sel_snap.fetch_shader : nullptr,
+                        sel_snap.modules, build->data, false);
+                    return build;
+                },
+                urgent);
+            if (queued) {
+                pending_graphics.emplace(key, std::move(build));
+            }
+        }
+        deferred_selections[i] = std::move(deferred_selections.back());
+        deferred_selections.pop_back();
     }
 }
 
@@ -1844,6 +1793,7 @@ bool PipelineCache::SkippableDispatch(const Shader::Info& info) const {
 
 bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     std::memset(&sel.graphics_key, 0, sizeof(GraphicsPipelineKey));
+    sel.key_complete = false;
     const auto& regs = (*sel.regs);
     auto& key = sel.graphics_key;
 
@@ -2016,6 +1966,11 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         }
     }
 
+    if (sel.compilation_pending) {
+        sel.key_complete = true;
+        return false;
+    }
+
     return true;
 }
 
@@ -2051,6 +2006,9 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             sel.compilation_pending = true;
             return false;
         }
+        if (!sel.modules[stage_out_idx]) {
+            sel.compilation_pending = true;
+        }
         if (fetch_shader_) {
             sel.fetch_shader = fetch_shader_;
         }
@@ -2059,6 +2017,8 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
 
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
+    sel.stage_programs.fill(nullptr);
+    sel.stage_perm_indices.fill(0);
     sel.fresh_permutation = false;
 
     static const bool multi_stage = [] {
@@ -2066,19 +2026,8 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         return !env || env[0] != '0';
     }();
     bind_stage(HwStage::Fragment, SwStage::Fragment);
-    if (sel.compilation_pending && (!multi_stage || sel.worker)) {
+    if (sel.compilation_pending && (!multi_stage || sel.worker || !sel.infos[u32(SwStage::Fragment)])) {
         return false;
-    }
-    if (sel.compilation_pending) {
-        // Only continue to vertex/geometry stage queueing when the fragment program's
-        // translated descriptor bindings are already known (so `binding` was advanced).
-        const auto* ps = regs.ProgramForStage(static_cast<u32>(HwStage::Fragment));
-        if (ps && ps->Address<u32*>()) {
-            const auto it_ps = program_cache.find(AmdGpu::GetParams(*ps).hash);
-            if (it_ps == program_cache.end() || !it_ps->second->info_template) {
-                return false;
-            }
-        }
     }
 
     const auto* fs_info = sel.infos[static_cast<u32>(SwStage::Fragment)];
@@ -2142,8 +2091,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         }
         break;
     case AmdGpu::ShaderStageEnable::VgtStages::Vs:
-        bind_stage(HwStage::Vertex, SwStage::Vertex);
-        if (sel.compilation_pending) {
+        if (!bind_stage(HwStage::Vertex, SwStage::Vertex)) {
             return false;
         }
         break;
@@ -2151,7 +2099,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         LOG_WARNING(Render_Vulkan, "unimplemented shader stage {}", (u32)regs.stage_enable.raw);
         return false;
     }
-    if (sel.compilation_pending) {
+    if (sel.compilation_pending && (!multi_stage || sel.worker)) {
         return false;
     }
 
@@ -2312,16 +2260,40 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         program_cache.erase(it_pgm);
         it_pgm = program_cache.end();
     }
+    static const bool multi_stage = [] {
+        const char* env = std::getenv("THEORDER_MULTI_STAGE_QUEUE");
+        return !env || env[0] != '0';
+    }();
+    static const bool multi_perm = [] {
+        const char* env = std::getenv("THEORDER_MULTI_PERMUTATION_QUEUE");
+        return !env || env[0] != '0';
+    }();
     if (it_pgm == program_cache.end()) {
         auto new_program = std::make_unique<Program>(hw_stage, sw_stage, params);
         if (compile_async) {
-            if (QueueShader(*new_program, hw_stage, sw_stage, params, runtime_info, binding, 0,
-                            true) &&
-                new_program->info_template) {
-                new_program->info.AddBindings(binding);
+            const bool queued = QueueShader(*new_program, hw_stage, sw_stage, params, runtime_info,
+                                            binding, 0, true);
+            Program* pgm_ptr = new_program.get();
+            {
+                std::unique_lock lock{programs_mutex};
+                program_cache.emplace(params.hash, std::move(new_program));
             }
-            std::unique_lock lock{programs_mutex};
-            program_cache.emplace(params.hash, std::move(new_program));
+            if (queued && pgm_ptr->info_template) {
+                pgm_ptr->info.pgm_base = params.Base();
+                pgm_ptr->info.user_data = params.user_data;
+                pgm_ptr->info.RefreshFlatBuf();
+                if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(pgm_ptr->info);
+                pgm_ptr->info.AddBindings(binding);
+                if (multi_stage && multi_perm && !sel.worker && !pgm_ptr->modules.empty()) {
+                    sel.stage_programs[static_cast<u32>(sw_stage)] = pgm_ptr;
+                    sel.stage_perm_indices[static_cast<u32>(sw_stage)] = 0;
+                    sel.fresh_permutation = true;
+                    return std::make_tuple(
+                        &pgm_ptr->info, vk::ShaderModule{},
+                        ToFetchShader(pgm_ptr->modules[0].spec.fetch_shader_data),
+                        HashCombine(params.hash, 0));
+                }
+            }
             return {};
         }
         auto start = binding;
@@ -2350,10 +2322,6 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     if (program->compilation_failed) {
         return {};
     }
-    static const bool multi_perm = [] {
-        const char* env = std::getenv("THEORDER_MULTI_PERMUTATION_QUEUE");
-        return !env || env[0] != '0';
-    }();
     if (program->modules.empty() && program->HasPending()) {
         if (program->info_template) {
             program->info.AddBindings(binding);
@@ -2363,7 +2331,20 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     if (program->modules.empty() && compile_async) {
         if (QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, 0, true) &&
             program->info_template) {
+            program->info.pgm_base = params.Base();
+            program->info.user_data = params.user_data;
+            program->info.RefreshFlatBuf();
+            if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(program->info);
             program->info.AddBindings(binding);
+            if (multi_stage && multi_perm && !sel.worker && !program->modules.empty()) {
+                sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+                sel.stage_perm_indices[static_cast<u32>(sw_stage)] = 0;
+                sel.fresh_permutation = true;
+                return std::make_tuple(
+                    &program->info, vk::ShaderModule{},
+                    ToFetchShader(program->modules[0].spec.fetch_shader_data),
+                    HashCombine(params.hash, 0));
+            }
         }
         return {};
     }
@@ -2389,12 +2370,32 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                       program->modules[program->last_used].spec == spec
                   ? program->modules.begin() + program->last_used
                   : std::ranges::find(program->modules, spec, &Program::Module::spec);
+    static const bool warm_load_program = [] {
+        const char* env = std::getenv("THEORDER_WARM_LOAD_PROGRAM");
+        return !env || env[0] != '0';
+    }();
+    if (it == program->modules.end() && warm_load_program && program->warm_partial) {
+        if (LoadCachedProgram(params.hash, hw_stage)) {
+            perm_idx = program->modules.size();
+            perm_hash = HashCombine(params.hash, perm_idx);
+            it = std::ranges::find(program->modules, spec, &Program::Module::spec);
+        }
+    }
     if (it != program->modules.end() && it->pending_compile) {
         if (async_compute_perm) {
             pending_compute_fallback_pgm = params.hash;
             pending_compute_fallback_spec = it->spec;
         }
         info.AddBindings(binding);
+        if (multi_stage && hw_stage != HwStage::Compute && !sel.worker) {
+            const size_t pending_idx = std::distance(program->modules.begin(), it);
+            sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+            sel.stage_perm_indices[static_cast<u32>(sw_stage)] = pending_idx;
+            sel.fresh_permutation = true;
+            return std::make_tuple(&program->info, vk::ShaderModule{},
+                                   ToFetchShader(it->spec.fetch_shader_data),
+                                   HashCombine(params.hash, pending_idx));
+        }
         return {};
     }
     if (it != program->modules.end() && !it->module &&
@@ -2428,9 +2429,19 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
                 pending_compute_fallback_pgm = params.hash;
                 pending_compute_fallback_spec = spec;
             }
-            QueueShader(*program, hw_stage, sw_stage, params, runtime_info, binding, perm_idx, false,
-                        std::move(spec));
+            const bool queued = QueueShader(*program, hw_stage, sw_stage, params, runtime_info,
+                                            binding, perm_idx, false, std::move(spec));
             info.AddBindings(binding);
+            if (queued && multi_stage && multi_perm && hw_stage != HwStage::Compute &&
+                !sel.worker && perm_idx < program->modules.size()) {
+                sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+                sel.stage_perm_indices[static_cast<u32>(sw_stage)] = perm_idx;
+                sel.fresh_permutation = true;
+                return std::make_tuple(
+                    &program->info, vk::ShaderModule{},
+                    ToFetchShader(program->modules[perm_idx].spec.fetch_shader_data),
+                    HashCombine(params.hash, perm_idx));
+            }
             return {};
         }
         if (!program->modules.empty()) {
@@ -2514,6 +2525,10 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             canonical_idx = canonical;
             perm_hash = HashCombine(params.hash, canonical);
         }
+    }
+    if (hw_stage != HwStage::Compute) {
+        sel.stage_programs[static_cast<u32>(sw_stage)] = program.get();
+        sel.stage_perm_indices[static_cast<u32>(sw_stage)] = canonical_idx;
     }
     sel.fresh_permutation |= program->modules[canonical_idx].fresh;
     return std::make_tuple(&program->info, module,

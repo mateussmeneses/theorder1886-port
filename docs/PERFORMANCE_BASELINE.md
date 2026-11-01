@@ -1,5 +1,41 @@
 # Performance baseline
 
+## 2026-11-01: Controlled Cold, Warm, and Revisit A/B Benchmarks
+
+Host: Windows 11 (10.0.26300), Intel Family 6 Model 183, NVIDIA GeForce RTX 5060 Laptop GPU,
+driver NVIDIA 621.1.0.0, Vulkan 1.4.357. Game: CUSA00035 01.02.
+Executable SHA-256: `e621858cd47e0567a055b9991579d55a7817e5b857dcb778eb8f19e574361114`.
+All runs are 60 seconds in the 3D title scene using `tools/batch_runs.py --frame-trace` with isolated
+scratch profile directories (`--user-template user`). No visible draws or essential compute dispatches
+were skipped (`THEORDER_VISIBLE_PIPELINE_PRIORITY=1` preserved in all runs).
+
+Manifests:
+- Cold (1st Visit): `out/batch/manifests/bench_cold_comparison.json`
+- Warm (Full 516-pipeline profile): `out/batch/manifests/bench_warm_comparison.json`
+- Revisit (2nd Visit seeded from 1st Visit output profile): `out/batch/manifests/bench_revisit_base.json`, `out/batch/manifests/bench_revisit_opt.json`
+
+| Metric | `base_cold` (1st Visit) | `opt_cold` (1st Visit) | `base_warm` (Warm Cache) | `opt_warm` (Warm Cache) | `base_revisit` (2nd Visit) | `opt_revisit` (2nd Visit) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Logged flips (60 s) | 3,480 | 3,480 | 3,420 | 3,420 | 3,420 | 3,420 |
+| Mean FPS (whole trace) | 59.21 | 59.10 | 58.53 | 58.63 | 58.46 | **58.99** |
+| Mean FPS (post-boot steady) | 59.34 | 59.23 | 59.70 | 59.71 | 59.39 | **59.81** |
+| Frame P95 (ms) | 17.78 | **17.75** | 17.78 | **17.70** | 17.75 | 17.83 |
+| Frame P99 (ms) | 18.58 | **18.35** | 18.35 | **18.08** | 18.39 | 18.42 |
+| Frame P99.9 (ms, whole trace) | 81.79 | **80.99** | 54.71 | **38.46 (-29.7%)** | 41.28 | **32.76 (-20.6%)** |
+| Frame P99.9 (ms, post-boot) | 68.86 | **54.62 (-20.7%)** | 32.03 | 32.68 | 32.56 | 32.63 |
+| Worst frame (ms, whole trace) | 220.63 | 250.73 | 1,049.74 | **995.18 (-5.2%)** | 849.90 | **752.85 (-11.4%)** |
+| Worst frame (ms, post-boot) | 220.63 | 250.73 | 107.61 | **80.44 (-25.2%)** | 405.13 | **34.06 (-91.6%)** |
+| Stalls > 50 / > 100 / > 200 ms (all) | 6 / 2 / 1 | 5 / 3 / 2 | 4 / 2 / 1 | **3 / 1 / 1** | 2 / 2 / 2 | **1 / 1 / 1** |
+| Stalls > 50 / > 100 / > 200 ms (post-boot) | 5 / 1 / 1 | **4** / 2 / 2 | 2 / 1 / 0 | **2 / 0 / 0** | 1 / 1 / 1 | **0 / 0 / 0** |
+| GPU-thread compiles | 183 | **100 (-45.4%)** | 109 | **29 (-73.4%)** | 74 | **25 (-66.2%)** |
+| GPU-thread compile time (ms) | 808.0 | **493.7 (-38.9%)** | 881.3 | **362.1 (-58.9%)** | 631.4 | **315.5 (-50.0%)** |
+| GPU-thread sync wait (ms) | 222.0 | **41.3 (-81.4%)** | 40.5 | **16.3 (-59.8%)** | 166.7 | **57.2 (-65.7%)** |
+| Background worker time (ms) | 11,216.8 | **637.0 (-94.3%)** | 10,902.0 | **66.4 (-99.4%)** | 7,662.4 | **103.5 (-98.6%)** |
+| Driver compile time total (ms) | 10,723.4 | **484.2 (-95.5%)** | 10,130.6 | **158.1 (-98.4%)** | 7,234.4 | **0.0 (-100.0%)** |
+| Binary cache hits / misses (compiled) | 8 / 169 | 6 / **109 (-35.5%)** | 491 / 65 | 475 / **1 (-98.5%)** | 144 / 60 | 115 / **0 (-100.0%)** |
+| Binary cache rejected / errors | 0 / 0 | 0 / 0 | 3 / 0 | **0 / 0** | 0 / 0 | **0 / 0** |
+| Compute fallback dispatches | 86 | **0 (-100%)** | 76 | **0 (-100%)** | 47 | **0 (-100%)** |
+
 ## 2026-10-27: retire the legacy timed runner
 
 The root-level `test_timed.py` was removed from the tracked tree. It used

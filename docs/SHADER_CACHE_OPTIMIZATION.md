@@ -2,6 +2,37 @@
 
 2026-10-22 checkpoint. No claim of stutter elimination.
 
+## 2026-11-01: Shader compiler, warm-cache permutation preservation, and pipeline reuse optimizations
+
+### Root causes identified and addressed
+
+1. **Hot-list warm-up masking cached shader permutations (`vk_pipeline_serialization.cpp`, `vk_pipeline_cache.cpp`)**:
+   - `StartHotWarmUp` (`hot_pipelines.txt`) called `MergeWarmStage`, which inserted a `Program` into `program_cache` containing only the single permutation referenced by the warmed pipeline.
+   - Later, when `GetProgram` looked up that shader hash, `program_cache.find(params.hash)` succeeded, bypassing `LoadCachedProgram(params.hash, hw_stage)` completely. Any other permutation `0..N-1` already stored in `Storage::DataBase` was ignored and recompiled from scratch at a shifted permutation index (`fresh_permutation = true`), invalidating the pipeline binary cache for that draw (~150 ms driver compile stall).
+   - **Fix (`THEORDER_WARM_LOAD_PROGRAM`, default `1`)**: `Program` instances created by `MergeWarmStage` / `LoadPipelineStage` are marked `warm_partial = true`. On the first specialization miss in `GetProgram`, `LoadCachedProgram` merges all stored `.meta` permutations `0..N-1` into the existing `Program` without overwriting already-warmed `vk::ShaderModule` handles or mutating `program->info`. In addition, `LoadCachedProgram` checks `db.Exists(Storage::BlobType::ShaderMeta, ...)` before `db.Load` when `meta_prefetch` is still reading, eliminating false `io_file.cpp` open errors.
+
+2. **Graphics stage content-key reuse (`vk_pipeline_cache.h`, `vk_pipeline_cache.cpp`)**:
+   - Graphics shader stages (`Vertex`, `Fragment`, `Geometry`, `Hull`, `Domain`, `Export`) previously hashed the raw permutation slot index (`HashCombine(params.hash, perm_idx)`) into `GraphicsPipelineKey::stage_hashes` even when a new specialization produced byte-identical SPIR-V (`spv_hash`) and identical interface/resource layout (`runtime_info`, `start`, `fetch_shader_data`, `vs_attribs`, descriptor counts, and `images`).
+   - **Fix (`THEORDER_STAGE_CONTENT_REUSE`, default `1`)**: `Program::StagePipelinePermutation(size_t index)` canonicalizes graphics stage permutations to the earliest compatible permutation index with identical `spv_hash` and specialization layout, avoiding redundant `GraphicsPipeline` compilations across both `GetProgram` and `DrawPreparation` workers.
+
+3. **Multi-stage, multi-permutation, and deferred pipeline pre-queueing (`vk_pipeline_cache.cpp`)**:
+   - Previously, `RefreshGraphicsStages` aborted immediately when the `Fragment` shader was pending compilation, delaying `Vertex`/`Geometry` shader capture and compilation until a subsequent frame. Furthermore, `Program` only allowed a single `pending` permutation build at a time, and `GraphicsPipeline` compilation could not be queued on the frame a shader finished compiling unless the draw was encountered again.
+   - **Fixes**:
+     - `THEORDER_MULTI_STAGE_QUEUE` (default `1`): `RefreshGraphicsStages` continues evaluating and queueing `Vertex`/`Geometry`/`Hull`/`Export` stages even when `Fragment` is still compiling, using the captured `info_template` bindings.
+     - `THEORDER_MULTI_PERMUTATION_QUEUE` (default `1`): `Program` supports multiple concurrent `pending_builds` for distinct specializations in the same frame, reserving their permutation slots with `pending_compile = true`.
+     - `THEORDER_PREQUEUE_SUBMISSION_PIPELINES` (default `1`): When `RefreshGraphicsKey` encounters a draw whose shader stages are captured and queued (`key_complete = true`), `RecordDeferredSelection` snapshots `AsyncGraphicsCompilation` immediately at the draw call while guest memory is valid. Once `PublishShaders` finishes compiling the stage `vk::ShaderModule`s, `DrainDeferredSelections` resolves the module handles and submits the `GraphicsPipeline` build to `AsyncCompiler` without re-reading guest registers or guest memory.
+
+4. **Point-light compute specialization guard and recurring compute async restore (`resource.h`, `vk_pipeline_cache.cpp`)**:
+   - Compute shader `0x804aeead` (clustered point-light/particle lighting, `flattened_ud_buf.size() == 708`) leaves unused light-volume image slots populated with stale `T#` descriptors from earlier passes, generating 40–65 spurious permutations and ~150 ms driver compiles per session.
+   - **Fixes**:
+     - `THEORDER_POINT_LIGHT_GUARD` (default `1`): zeroes unread image descriptor slots beyond the active light count in `0x804aeead` before `StageSpecialization` reads them.
+     - `THEORDER_RECURRING_COMPUTE_ASYNC` (default `1`): lowers `SkippableDispatch` from 8 frames (with a 4-flip idle reset) to 3 frames (`MinFrames = 3`, matching TOport's `RecurringMoments = 3`) for non-image-writing compute shaders, enables `g_pipeline_restore_only = can_async` on compute binary restore, and queues new permutations of recurring non-image-writing compute shaders asynchronously while dispatching `FallbackComputePipeline`. Essential image-writing compute shaders (such as Iggy UI glyph uploads) remain strictly synchronous.
+
+5. **RAM/CPU-aware background compile budget and starvation-free fair queue (`vk_async_compiler.h`, `vk_pipeline_cache.cpp`)**:
+   - **Fixes**:
+     - `THEORDER_COMPILE_BUDGET` (default `1`): samples `GlobalMemoryStatusEx` and `GetSystemTimes` every 250 ms; when available physical RAM drops below 1,536 MiB or total CPU load exceeds 90%, excess background workers yield briefly (up to 4 ms) unless an urgent or `Prioritize`d visible-draw job is waiting.
+     - `THEORDER_FAIR_QUEUE` (default `1`): prevents indefinite starvation of background `tasks` during sustained bursts (`>= 8` consecutive) of un-prioritized `urgent` jobs while always executing `Prioritize`d visible-draw pipelines (`THEORDER_VISIBLE_PIPELINE_PRIORITY=1`) first.
+
 ## Graphics motion-address specialization
 
 `GraphicsPipeline` supplied the session's two object-motion buffer device

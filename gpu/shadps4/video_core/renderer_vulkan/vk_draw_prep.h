@@ -159,17 +159,6 @@ public:
         return current;
     }
 
-    /// Copies command buffers of submissions queued after `current` for pipeline pre-queueing.
-    void CopyUpcomingCommands(std::vector<std::vector<u32>>& out) {
-        std::scoped_lock lk{mutex};
-        const u64 cur_seq = current ? current->seq : gpu_seq.load(std::memory_order_relaxed);
-        for (const auto& sub : submissions) {
-            if (sub && sub->seq > cur_seq && !sub->commands.empty()) {
-                out.push_back(sub->commands);
-            }
-        }
-    }
-
 private:
     u32 current_draw = 0;
     u64 used = 0, unused = 0;

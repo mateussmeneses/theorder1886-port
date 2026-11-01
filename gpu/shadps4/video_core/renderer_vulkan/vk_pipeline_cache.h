@@ -73,6 +73,7 @@ struct Program {
     std::shared_ptr<AsyncShaderCompilation> pending;
     std::vector<std::shared_ptr<AsyncShaderCompilation>> pending_builds;
     bool compilation_failed = false;
+    bool warm_partial = false; ///< port: created by warm-up; other cached perms loaded on miss
     std::vector<Shader::StageSpecialization> failed_permutations;
 
     [[nodiscard]] bool HasPending() const noexcept {
@@ -177,10 +178,13 @@ struct PipelineSelection {
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<Program*, MaxShaderStages> stage_programs{};
+    std::array<size_t, MaxShaderStages> stage_perm_indices{};
     std::optional<Shader::Gcn::FetchShaderData> fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     bool motion = false;
     bool compilation_pending = false;
+    bool key_complete = false;
     bool fresh_permutation = false; ///< port: a stage uses a Program::Module::fresh permutation
     DrawIndirectParams draw_indirect_params{};
     struct PrepWorker* worker{}; ///< set: read-only selection for a draw-preparation worker
@@ -298,7 +302,6 @@ private:
     bool QueueGraphicsBuild(PipelineSelection& s, bool restore_expected);
     void RecordDeferredSelection(const PipelineSelection& s);
     void DrainDeferredSelections();
-    void PrequeueUpcomingPipelines();
     void SeedWorkerCaches();
     bool CheckCacheProfile();
     struct BackgroundWarmup;
@@ -399,16 +402,8 @@ private:
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>> graphics_pipelines;
     PipelineSelection sel{}; ///< GPU thread selection state
     DrawPreparation* draw_prep = nullptr;
-    struct DeferredSelection {
-        u64 signature{};
-        std::unique_ptr<AmdGpu::Regs> regs;
-        DrawIndirectParams params{};
-    };
-    std::vector<DeferredSelection> deferred_selections;
-    std::vector<std::unique_ptr<AmdGpu::Regs>> deferred_regs_pool;
-    std::unique_ptr<AmdGpu::Regs> prequeue_regs;
+    std::vector<std::shared_ptr<AsyncGraphicsCompilation>> deferred_selections;
     bool draining_deferred = false;
-    bool prequeue_active = false;
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
 

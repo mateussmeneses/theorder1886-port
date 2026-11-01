@@ -4276,21 +4276,14 @@ void Rasterizer::UpdateDepthStencilState() const {
     }
 
     const auto depth_bias_enabled = regs.polygon_control.NeedsBias();
-    // Adapted from TOport / Igor Augusto's redraw-depth-bias experiment:
-    // https://github.com/IgorAugustoHH/The-Order-1886-PC-Port/commit/fff668c
-    // THEORDER_REDRAW_DEPTH_BIAS=<units> (default 128.0f): universal facial & character redraw depth bias.
-    // A pass that redraws the same mesh over an earlier pass (depth test LessEqual, no depth
-    // write, no bias of its own) relies on bit-identical positions; on PC GPUs floating-point
-    // rounding can differ at single pixels (dark dots/speckles on faces). Biasing by 128 units
-    // completely eliminates facial dots while leaving GreaterEqual passes (light volumes) alone.
-    static const float redraw_bias = [] {
-        const char* env = std::getenv("THEORDER_REDRAW_DEPTH_BIAS");
-        if (!env) env = std::getenv("BB_REDRAW_DEPTH_BIAS");
-        if (env) {
-            return float(std::atof(env));
-        }
-        return 128.0f;
-    }();
+    // Redraw depth bias: in TOport commit e825344, applying a universal 128.0f depth bias
+    // to all non-writing LessEqual draws was reverted because it caused black tears/streaks
+    // across general scene geometry. BbFaceDepth (gpu/shim/bb_face_depth_fix.cpp) handles
+    // specific character facial passes cleanly without biasing arbitrary scene meshes.
+    // THEORDER_REDRAW_DEPTH_BIAS=<units> (default 0.0f): preserved for isolated A/B testing.
+    static const float redraw_bias = Vulkan::ParseRedrawDepthBias(
+        std::getenv("THEORDER_REDRAW_DEPTH_BIAS"),
+        std::getenv("BB_REDRAW_DEPTH_BIAS"));
     const AmdGpu::CompareFunc depth_func = regs.depth_control.depth_func;
     const bool redraw = redraw_bias > 0.0f && depth_test_enabled && !depth_bias_enabled &&
                         !regs.depth_control.depth_write_enable &&

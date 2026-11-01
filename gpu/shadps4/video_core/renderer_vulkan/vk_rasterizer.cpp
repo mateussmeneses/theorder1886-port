@@ -3268,6 +3268,17 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
                         Regs().ta_bc_base.Address());
             ssharp = AmdGpu::Sampler{};
         }
+        // The Order's UI drawn scaled into the upscaled output (1440p: 1.33x): its
+        // point-sampled sprites (button icons) repeated uneven texel rows; bilinear keeps them
+        // smooth. 1:1 offscreen UI passes sample texel centres, unchanged either way.
+        if (upscaler->OrderUiPhase() && !sampler.is_depth) {
+            if (ssharp.xy_mag_filter == AmdGpu::Filter::Point) {
+                ssharp.xy_mag_filter.Assign(AmdGpu::Filter::Bilinear);
+            }
+            if (ssharp.xy_min_filter == AmdGpu::Filter::Point) {
+                ssharp.xy_min_filter.Assign(AmdGpu::Filter::Bilinear);
+            }
+        }
         const auto vk_sampler = texture_cache.GetSampler(
             ssharp, Regs().ta_bc_base, sampler.is_depth, sampler.is_depth ? 0.0f : sampler_lod_bias);
         image_infos.emplace_back(vk_sampler, VK_NULL_HANDLE, vk::ImageLayout::eGeneral);
@@ -3528,7 +3539,18 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
         }
         std::printf("Scene pass: reduced %d %s\n", reduced, why.c_str());
     }
-    push_data.scene_size = reduced ? SceneResolution::Pack(scene_targets->Size()) : 0;
+    // The shaders turn reduced FragCoord back into guest pixels as value * 1920x1080 / scene
+    // (emit_spirv_context_get_set.cpp). Express the reduced size against 1920x1080 so the factor
+    // is game / scene for other game sizes too (the retail 1920x800 scene: 800/534, not 1080/534).
+    if (reduced) {
+        const auto scene = scene_targets->Size();
+        const auto game = SceneResolution::GameSize();
+        push_data.scene_size = SceneResolution::Pack(
+            {u32(std::lround(double(scene.width) * 1920.0 / game.width)),
+             u32(std::lround(double(scene.height) * 1080.0 / game.height))});
+    } else {
+        push_data.scene_size = 0;
+    }
     if (PortStats::enabled) {
         PortStats::reduced_draws.fetch_add(reduced, std::memory_order_relaxed);
         PortStats::scene_draws.fetch_add(scene_started, std::memory_order_relaxed);

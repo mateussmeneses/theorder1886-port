@@ -6,9 +6,9 @@
 #include "common/alignment.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
-#include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "video_core/renderer_vulkan/vk_scene_resolution.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/aliasing.h"
@@ -19,6 +19,16 @@
 #include <vulkan/vulkan_format_traits.hpp>
 
 namespace Vulkan {
+
+// port: bound copy payloads to 64 KiB per command so large batches fit recording chunks.
+template <typename T, typename Record>
+static void RecordInSlices(Scheduler& scheduler, std::span<const T> regions, Record&& record) {
+    constexpr std::size_t PerCommand = 64 * 1024 / sizeof(T);
+    for (std::size_t at = 0; at < regions.size(); at += PerCommand) {
+        record(
+            scheduler.RecordData(regions.subspan(at, std::min(PerCommand, regions.size() - at))));
+    }
+}
 
 static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
     switch (type) {
@@ -145,9 +155,12 @@ void Runtime::CopyBuffer(const VideoCore::Buffer* src, const VideoCore::Buffer* 
         FlushBarriers();
     }
 
-    scheduler.Record([src_handle = src->Handle(), dst_handle = dst->Handle(),
-                      regions = scheduler.RecordData(copies)](vk::CommandBuffer cmdbuf) {
-        cmdbuf.copyBuffer(src_handle, dst_handle, regions.size(), regions.data());
+    // port: split large buffer copy lists without changing their region order.
+    RecordInSlices(scheduler, copies, [&](std::span<const vk::BufferCopy> regions) {
+        scheduler.Record([src_handle = src->Handle(), dst_handle = dst->Handle(),
+                          regions](vk::CommandBuffer cmdbuf) {
+            cmdbuf.copyBuffer(src_handle, dst_handle, regions.size(), regions.data());
+        });
     });
 
     if (bounded) {
@@ -252,10 +265,13 @@ void Runtime::UploadImage(VideoCore::Image* dst, const VideoCore::Buffer* src,
         FlushBarriers();
     }
 
-    scheduler.Record([src_handle = src->Handle(), image = dst->GetImage(),
-                      regions = scheduler.RecordData(upload_copies)](vk::CommandBuffer cmdbuf) {
-        cmdbuf.copyBufferToImage(src_handle, image, vk::ImageLayout::eTransferDstOptimal,
-                                 regions.size(), regions.data());
+    // port: keep image upload region payloads within the per-command recording budget.
+    RecordInSlices(scheduler, upload_copies, [&](std::span<const vk::BufferImageCopy> regions) {
+        scheduler.Record([src_handle = src->Handle(), image = dst->GetImage(),
+                          regions](vk::CommandBuffer cmdbuf) {
+            cmdbuf.copyBufferToImage(src_handle, image, vk::ImageLayout::eTransferDstOptimal,
+                                     regions.size(), regions.data());
+        });
     });
 
     for (const auto& copy : upload_copies) {
@@ -311,10 +327,13 @@ void Runtime::DownloadImage(VideoCore::Image* src, const VideoCore::Buffer* dst,
         FlushBarriers();
     }
 
-    scheduler.Record([image = src->GetImage(), buffer = dst->Handle(),
-                      regions = scheduler.RecordData(download_copies)](vk::CommandBuffer cmdbuf) {
-        cmdbuf.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer,
-                                 regions.size(), regions.data());
+    // port: image downloads need the same bounded recording payload as uploads.
+    RecordInSlices(scheduler, download_copies, [&](std::span<const vk::BufferImageCopy> regions) {
+        scheduler.Record(
+            [image = src->GetImage(), buffer = dst->Handle(), regions](vk::CommandBuffer cmdbuf) {
+                cmdbuf.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer,
+                                         regions.size(), regions.data());
+            });
     });
 
     for (const auto& copy : download_copies) {

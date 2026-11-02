@@ -607,8 +607,21 @@ public:
 
     /// Raw storage in the chunk for a command's variable-length data; null when full.
     void* Allocate(size_t bytes, size_t align) {
+        // port: preserve alignment within the oversized group's spill block.
+        if (spill_cursor) {
+            void* result = spill_cursor;
+            size_t remaining = spill_remaining;
+            if (!std::align(align, bytes, result, remaining)) {
+                return nullptr;
+            }
+            spill_used += spill_remaining - remaining + bytes;
+            spill_cursor = static_cast<std::byte*>(result) + bytes;
+            spill_remaining = remaining - bytes;
+            return result;
+        }
         const size_t offset = (used + align - 1) & ~(align - 1);
-        if (offset + bytes > Capacity) {
+        // port: reject oversized inline allocations without overflowing the size check.
+        if (offset > Capacity || bytes > Capacity - offset) {
             return nullptr;
         }
         used = offset + bytes;
@@ -625,6 +638,10 @@ public:
         }
         first = last = nullptr;
         used = 0;
+        // port: release spilled data only after every consuming command has executed.
+        spill_cursor = nullptr;
+        spill_remaining = spill_used = 0;
+        spill_blocks.clear();
     }
 
     [[nodiscard]] bool Empty() const noexcept {
@@ -632,7 +649,8 @@ public:
     }
 
     [[nodiscard]] size_t Size() const noexcept {
-        return used;
+        // port: count spilled payloads toward recording batch thresholds.
+        return used + spill_used;
     }
 
 private:
@@ -663,6 +681,10 @@ private:
 
     alignas(64) std::byte storage[Capacity];
     size_t used = 0;
+    // port: retain oversized groups until this chunk is recycled.
+    std::vector<std::unique_ptr<std::byte[]>> spill_blocks;
+    std::byte* spill_cursor = nullptr;
+    size_t spill_remaining = 0, spill_used = 0;
     CommandBase* first{};
     CommandBase* last{};
 };
@@ -759,11 +781,18 @@ public:
             record_chunk = AcquireChunk();
         }
         if (!record_chunk->Push(std::forward<Func>(func))) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
+            // port: replace before retiring so recording storage stays valid.
+            RetireChunk();
             const bool pushed = record_chunk->Push(std::forward<Func>(func));
             ASSERT(pushed);
         }
+    }
+
+    // port: acquire the replacement first so reentrant recording during acquisition
+    // still finds a valid chunk, including guest memory faults handled on this thread.
+    void RetireChunk() {
+        auto next = AcquireChunk();
+        full_chunks.push_back(std::exchange(record_chunk, std::move(next)));
     }
 
     /// True when Record() defers commands (and RecordData() copies into chunks).

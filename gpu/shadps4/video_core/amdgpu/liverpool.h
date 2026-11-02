@@ -123,6 +123,17 @@ public:
         return num_submits == 0 && (work_retired || !use_retired);
     }
 
+    // port: record the submission count so an older idle cannot release a newer lock.
+    u64 SubmissionsTotal() {
+        std::scoped_lock lk{submit_mutex};
+        return submissions_total;
+    }
+
+    // port: read the completed count so idle handlers can reject stale interrupts.
+    u64 IdleGeneration() const {
+        return idle_generation.load(std::memory_order_acquire);
+    }
+
     void SetVoPort(Libraries::VideoOut::VideoOutPort* port) {
         vo_port = port;
     }
@@ -272,6 +283,9 @@ private:
     /// decrements num_submits once it has decoded a submission, before that). Under
     /// submit_mutex with num_submits.
     std::atomic<bool> work_retired{true};
+    // port: distinguish submitted work from the generation covered by the idle interrupt.
+    std::atomic<u64> submissions_total{};
+    std::atomic<u64> idle_generation{};
     std::atomic<u32> num_commands{};
     std::atomic<bool> submit_done{};
     std::mutex submit_mutex;

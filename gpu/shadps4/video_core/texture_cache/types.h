@@ -3,6 +3,8 @@
 
 #pragma once
 
+// port: clamp view ranges with standard min/max helpers.
+#include <algorithm>
 #include "common/slot_vector.h"
 #include "common/types.h"
 
@@ -65,6 +67,11 @@ struct SubresourceExtent {
     u16 layers = 1;
 
     auto operator<=>(const SubresourceExtent&) const = default;
+
+    // port: check both dimensions so extra mips cannot hide missing layers.
+    bool Contains(const SubresourceExtent& other) const noexcept {
+        return levels >= other.levels && layers >= other.layers;
+    }
 };
 
 struct SubresourceRange {
@@ -72,6 +79,26 @@ struct SubresourceRange {
     SubresourceExtent extent;
 
     bool operator==(const SubresourceRange&) const = default;
+
+    // port: bound views to the resolved image, keeping counts positive without overflow.
+    bool ClampTo(const SubresourceExtent& resources) noexcept {
+        // Fields are u16 in this port: compute in u32, store back.
+        const u32 levels = std::max<u32>(resources.levels, 1u);
+        const u32 layers = std::max<u32>(resources.layers, 1u);
+        const u32 base_level = base.level, base_layer = base.layer;
+        const u32 num_levels = extent.levels, num_layers = extent.layers;
+        if (base_level < levels && base_layer < layers && num_levels > 0 && num_layers > 0 &&
+            num_levels <= levels - base_level && num_layers <= layers - base_layer) {
+            return false;
+        }
+        const u32 new_level = std::min(base_level, levels - 1);
+        const u32 new_layer = std::min(base_layer, layers - 1);
+        base.level = static_cast<u16>(new_level);
+        base.layer = static_cast<u16>(new_layer);
+        extent.levels = static_cast<u16>(std::clamp(num_levels, 1u, levels - new_level));
+        extent.layers = static_cast<u16>(std::clamp(num_layers, 1u, layers - new_layer));
+        return true;
+    }
 };
 
 struct ImageCopy {

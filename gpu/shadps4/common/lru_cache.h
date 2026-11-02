@@ -59,6 +59,7 @@ public:
 
     template <typename Func>
     void ForEachItemBelow(TickType tick, Func&& func) {
+        // port: inspect the callback's result type so a spent budget stops the walk.
         static constexpr bool RETURNS_BOOL =
             std::is_same_v<std::invoke_result_t<Func, ObjectType&>, bool>; // port: lvalue, as called
         Node* it = first;

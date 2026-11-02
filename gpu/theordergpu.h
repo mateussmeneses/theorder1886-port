@@ -18,6 +18,9 @@ typedef struct {
 void theordergpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
 int theordergpu_init(const TheOrderGpuConfig *config);
+/* Unless THEORDER_CACHE_FLUSH_ON_EXIT=0: waits at most two seconds for queued shader-cache
+ * writes before a window close or restart skips destructors (SpartanPort c22329f). */
+void theordergpu_flush_cache(void);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t theordergpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */

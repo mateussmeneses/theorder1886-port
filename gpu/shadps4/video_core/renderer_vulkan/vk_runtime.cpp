@@ -650,8 +650,10 @@ bool Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
             FlushBarriers();
         }
 
+        // port: the backing's real sample count, clamped to the host (#5595).
+        const u32 actual_dst_samples = static_cast<u32>(dst->backing->image.image_ci.samples);
         blit_helper->ReinterpretColorAsMsDepth(
-            dst->info.size.width, dst->info.size.height, dst->info.num_samples,
+            dst->info.size.width, dst->info.size.height, actual_dst_samples,
             src->info.num_samples > 1,
             src->info.pixel_format, dst->info.pixel_format, src->GetImage(), dst->GetImage());
     }

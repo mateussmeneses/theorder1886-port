@@ -49,6 +49,19 @@ empty text falls back to English). The icon (`launcher/theorder.ico`/`.png`, dra
 `packaging/windows/make_theorder_icon.py`) is built into `The Order 1886.exe`, `theorder-probe.exe`
 (the game window) and `theorder-gpu-capabilities.exe`.
 
+## RecompLauncher
+
+The Windows ZIP includes `recomplauncher.json` beside `The Order 1886.exe`. Select the
+extracted PS4 game folder in RecompLauncher. The port checks the required files and title ID
+without opening a window, then RecompLauncher records the folder in `settings.json` and
+starts the existing direct-play mode. The game files stay in the selected folder.
+
+Graphics controls edit the port's `theorder.ini`. RecompLauncher backs up the default portable
+`user/savedata` folder. If you chose a custom save folder in the port, set the same folder as
+the save location in RecompLauncher. Separate update folders still use the port's Update folder
+setting. The setup check checks the folder structure and title ID. The tested game version is
+CUSA00035 01.02.
+
 ## What is different from Linux
 
 | Linux | Windows |

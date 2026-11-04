@@ -28,6 +28,46 @@ def sfo_bytes(**values):
 BASE_SFO = sfo_bytes(TITLE_ID='CUSA00035', APP_VER='01.00')
 
 
+class RecompLauncherTest(unittest.TestCase):
+    def test_setup_uses_manifest_and_checks_dump_without_starting_game(self):
+        import contextlib
+        import tempfile
+        from pathlib import Path
+
+        profile = json.loads((ROOT / 'recomplauncher.json').read_text(encoding='utf-8'))
+        self.assertEqual(profile['start']['args'], ['--play'])
+        for setting in profile['settings']:
+            for key, value in setting['defaults'].items():
+                self.assertEqual(value, launcher.INI_DEFAULTS[key])
+        with tempfile.TemporaryDirectory(prefix='order1886 setup ') as temp:
+            folder = Path(temp)
+            args = [sys.executable, *(str(folder) if arg == '{game}' else arg
+                                      for arg in profile['prepare']['args'])]
+            for name, _ in launcher.REQUIRED_GAME_FILES:
+                path = folder / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(BASE_SFO if path.suffix == '.sfo' else b'dump fixture')
+            with mock.patch.object(sys, 'argv', args), mock.patch.object(launcher, 'play_without_window') as play:
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as result:
+                    launcher.main()
+                self.assertEqual(result.exception.code, 0)
+                self.assertIn('progress 1 Game folder checked', output.getvalue())
+                play.assert_not_called()
+
+                (folder / 'sce_sys/param.sfo').write_bytes(sfo_bytes(TITLE_ID='CUSA99999'))
+                with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as result:
+                    launcher.main()
+                self.assertEqual(result.exception.code, 1)
+
+                (folder / 'eboot.bin').unlink()
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as result:
+                    launcher.main()
+                self.assertEqual(result.exception.code, 1)
+                self.assertIn('eboot.bin', output.getvalue())
+
+
 class ControlMapTest(unittest.TestCase):
     def test_each_windows_start_checks_updates_even_if_previously_disabled(self):
         for saved in ({}, {'check_updates': False}, {'check_updates': True}):

@@ -79,11 +79,10 @@ struct EffectiveDepthStencilState {
     };
 }
 
-// Redraw depth bias: in TOport commit e825344, applying a universal 128.0f depth bias
-// to all non-writing LessEqual draws was reverted because it caused black tears/streaks
-// across general scene geometry. BbFaceDepth (gpu/shim/bb_face_depth_fix.cpp) handles
-// specific character facial passes cleanly without biasing arbitrary scene meshes.
-// Default is 0.0f; configurable via THEORDER_REDRAW_DEPTH_BIAS / BB_REDRAW_DEPTH_BIAS.
+// Redraw depth bias: non-writing LessEqual redraw passes on character faces (decals, eyes,
+// facial hair, secondary shading) require a positive depth bias (128.0f) to prevent z-fighting
+// and flickering against the primary depth prepass. Configurable via THEORDER_REDRAW_DEPTH_BIAS
+// or BB_REDRAW_DEPTH_BIAS.
 inline float ParseRedrawDepthBias(const char* env_theorder, const char* env_bb) {
     if (env_theorder && *env_theorder) {
         return float(std::atof(env_theorder));
@@ -91,7 +90,7 @@ inline float ParseRedrawDepthBias(const char* env_theorder, const char* env_bb) 
     if (env_bb && *env_bb) {
         return float(std::atof(env_bb));
     }
-    return 0.0f;
+    return 128.0f;
 }
 
 } // namespace Vulkan

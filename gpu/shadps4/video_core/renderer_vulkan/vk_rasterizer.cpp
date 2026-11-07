@@ -3271,8 +3271,12 @@ void Rasterizer::BindSamplers(const Shader::Info& stage, const PreparedStage* pr
         }
         // The Order's UI drawn scaled into the upscaled output (1440p: 1.33x): its
         // point-sampled sprites (button icons) repeated uneven texel rows; bilinear keeps them
-        // smooth. 1:1 offscreen UI passes sample texel centres, unchanged either way.
-        if (upscaler->OrderUiPhase() && !sampler.is_depth) {
+        // smooth when THEORDER_UI_BILINEAR=1 is explicitly enabled.
+        static const bool ui_bilinear = [] {
+            const char* env = std::getenv("THEORDER_UI_BILINEAR");
+            return env && env[0] == '1';
+        }();
+        if (ui_bilinear && upscaler->OrderUiPhase() && !sampler.is_depth) {
             if (ssharp.xy_mag_filter == AmdGpu::Filter::Point) {
                 ssharp.xy_mag_filter.Assign(AmdGpu::Filter::Bilinear);
             }

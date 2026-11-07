@@ -1,5 +1,31 @@
 # Graphics regression checkpoint
 
+## 2026-11-07: post-merge regression fix (DOF screen blur, cross-aspect depth copy, facial redraw bias)
+
+**Hardware / build:** NVIDIA GeForce RTX 5060 Laptop GPU (driver 621.14, Vulkan 1.4.357), Windows 11, CUSA00035 01.02, 16:10 (`1728x1080`), 120 FPS patch, `upscaler=fsr3`, `preset=0`.
+
+**Observed symptoms after merging `c5c385a`:**
+1. Persistent out-of-focus / Depth-of-Field blur across the entire screen from startup through gameplay.
+2. Return of facial flickering and graphical artifacts on character faces.
+
+**Root causes identified from `user/last_run.log` and code diff (`a9dbaa8..c5c385a`):**
+1. **Cross-aspect `vkCmdCopyImage` on `VK_KHR_maintenance8` (`depth_alias_copy.h`, `vk_runtime.cpp`):**
+   - Starting at Flip #2, the engine copies the `1728x1080` `D32_SFLOAT` (`eDepth`) scene depth buffer (`0x104f0c0000`) to the `1728x1080` `R32_SFLOAT` (`eColor`) post-processing depth texture (`0x104e090000`) and downsamples `864x540` `R32_SFLOAT` to `864x540` `D32_SFLOAT` (`0x104ffd8000`) every frame for Depth-of-Field (CoC) and post-processing.
+   - `PlanDepthAliasCopy` returned `DepthAliasCopy::Direct` (`CopyImage`) when `maintenance8` was true. However, `vkCmdCopyImage` across `eDepth` and `eColor` aspects (`src->aspect_mask != dst->aspect_mask`) is invalid and fails to decompress/transfer the depth buffer (which is why commit `ab5c8c2e0d` restricted `CopyImage` to `src->aspect_mask == dst->aspect_mask` and used `CopyImageWithBuffer` for cross-aspect copies).
+   - Additionally, `Runtime::CopyColorAndDepth` returned `false` whenever `PlanDepthAliasCopy` returned `DepthAliasCopy::Unsupported` instead of falling through to the standard `CopyColorAndDepth` path, dropping depth/color transfers for stencil-bearing (`D32_SFLOAT_S8_UINT`), multi-mip, multi-layer, and `THEORDER_NO_MSAA` surfaces.
+2. **Facial redraw depth bias (`vk_depth_stencil_state.h`):**
+   - Changing `ParseRedrawDepthBias` default from `128.0f` to `0.0f` removed the depth bias on non-writing `LessEqual` facial decal/eye/secondary redraw passes not covered by the two shader pairs in `BbFaceDepth`, reintroducing facial z-fighting and flickering.
+3. **Scene resolution coordinate space (`scene_resolution.h`) & UI point sampler promotion (`vk_rasterizer.cpp`):**
+   - `SceneResolution::GameSize()` defaulted to `1920x800` instead of `1920x1080`, scaling `push_data.scene_size` height by `1080 / 800` (`1.35x`) on reduced passes.
+   - `BindSamplers` unconditionally promoted `Filter::Point` to `Filter::Bilinear` during `OrderUiPhase()`.
+
+**Resolution:**
+- `PlanDepthAliasCopy` now always returns `DepthAliasCopy::Buffer` for single-sample cross-aspect `D32_SFLOAT <-> R32_SFLOAT` transfers even when `maintenance8` is supported, and excludes `guest_ms_depth`.
+- `Runtime::CopyColorAndDepth` now uses `PlanDepthAliasCopy` specifically for the `DepthToColor` and `ColorToDepth` MSAA bit-packing blits, falling through to the standard `CopyColorAndDepth` path (`CopyImageWithBuffer` for cross-aspect 1x copies, `CopyImage` for same-aspect copies, and `ReinterpretColorAsMsDepth` for `guest_ms_depth`) for all other cases.
+- Restored `ParseRedrawDepthBias` default to `128.0f` (`THEORDER_REDRAW_DEPTH_BIAS` can still override it).
+- Restored `SceneResolution::GameSize()` default to `1920x1080` unless `THEORDER_ORDER_RESOLUTION=800` is explicitly set.
+- Gated `OrderUiPhase()` point-to-bilinear sampler promotion behind `THEORDER_UI_BILINEAR=1` (default off).
+
 ## 2026-11-06: RDNA4 (RX 9070 XT) verification of the sun-shadow fix chain - #26
 
 **Hardware / build:** AMD RX 9070 XT (Mesa RADV GFX1201) on Fedora Atomic (Bazzite),

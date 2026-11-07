@@ -81,12 +81,12 @@ int main() {
         regs->depth_render_override.force_z_valid = 1;
         assert(GetEffectiveDepthStencilState(*regs).needs_attachment);
     }
-    // Default redraw depth bias is 0.0f (no universal bias on LessEqual passes;
-    // face depth fix in BbFaceDepth handles character redraws without tears).
+    // Default redraw depth bias is 128.0f to prevent z-fighting on facial redraw passes;
+    // configurable via THEORDER_REDRAW_DEPTH_BIAS / BB_REDRAW_DEPTH_BIAS.
     {
-        assert(Vulkan::ParseRedrawDepthBias(nullptr, nullptr) == 0.0f);
-        assert(Vulkan::ParseRedrawDepthBias("", "") == 0.0f);
-        assert(Vulkan::ParseRedrawDepthBias("128.0", nullptr) == 128.0f);
+        assert(Vulkan::ParseRedrawDepthBias(nullptr, nullptr) == 128.0f);
+        assert(Vulkan::ParseRedrawDepthBias("", "") == 128.0f);
+        assert(Vulkan::ParseRedrawDepthBias("0.0", nullptr) == 0.0f);
         assert(Vulkan::ParseRedrawDepthBias(nullptr, "64.0") == 64.0f);
         assert(Vulkan::ParseRedrawDepthBias("32.0", "64.0") == 32.0f);
     }

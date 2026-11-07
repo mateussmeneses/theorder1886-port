@@ -22,14 +22,18 @@ inline DepthAliasCopy PlanDepthAliasCopy(const ImageInfo& src, const ImageInfo& 
     if (src.num_samples == dst.num_samples && src.pixel_format == dst.pixel_format &&
         !src.props.has_stencil && !dst.props.has_stencil) return DepthAliasCopy::Direct;
     if (src.num_samples == 1 && dst.num_samples == 1) {
-        // Cross-aspect copies have an explicit Vulkan compatibility list;
-        // maintenance8 alone does not make arbitrary formats compatible.
+        if (dst.props.is_depth && dst.guest_samples > 1) {
+            return DepthAliasCopy::Unsupported;
+        }
+        // Cross-aspect copies (eDepth <-> eColor) must use a staging buffer even when
+        // maintenance8 is supported, as vkCmdCopyImage across depth and color aspects is invalid.
         const bool float_alias =
             (src.pixel_format == vk::Format::eD32Sfloat && dst.pixel_format == vk::Format::eR32Sfloat) ||
             (dst.pixel_format == vk::Format::eD32Sfloat && src.pixel_format == vk::Format::eR32Sfloat);
         if (float_alias && !src.props.has_stencil && !dst.props.has_stencil &&
             src.resources.levels == 1 && src.resources.layers == 1) {
-            return maintenance8 ? DepthAliasCopy::Direct : DepthAliasCopy::Buffer;
+            (void)maintenance8;
+            return DepthAliasCopy::Buffer;
         }
         return DepthAliasCopy::Unsupported;
     }

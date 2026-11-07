@@ -36,7 +36,7 @@ int main() {
     depth.num_samples = color.num_samples = 1;
     color.num_bits = 32; color.pixel_format = vk::Format::eR32Sfloat;
     assert(PlanDepthAliasCopy(depth, color, false) == DepthAliasCopy::Buffer);
-    assert(PlanDepthAliasCopy(depth, color, true) == DepthAliasCopy::Direct);
+    assert(PlanDepthAliasCopy(depth, color, true) == DepthAliasCopy::Buffer);
     auto stencil = depth; stencil.props.has_stencil = true;
     assert(PlanDepthAliasCopy(stencil, stencil, true) == DepthAliasCopy::Unsupported);
     color.pixel_format = vk::Format::eR8G8B8A8Unorm;

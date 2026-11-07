@@ -562,40 +562,30 @@ void Runtime::CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32
 }
 
 bool Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
+    // port: with THEORDER_NO_MSAA a guest multisampled depth target is single-sampled on the host; a
+    // colour image aliasing it still holds the samples as channels, so sample 0 is channel 0.
+    const bool guest_ms_depth = dst->info.props.is_depth && dst->info.guest_samples > 1;
     static const bool fix = [] {
         const char* value = std::getenv("THEORDER_DEPTH_ALIAS_FIX");
         if (!value) value = std::getenv("BB_DEPTH_ALIAS_FIX");
         return !value || value[0] != '0';
     }();
-    if (fix) {
+    if (fix && !guest_ms_depth) {
         using VideoCore::DepthAliasCopy;
         const auto plan = VideoCore::PlanDepthAliasCopy(src->info, dst->info,
                                                        instance.IsMaintenance8Supported());
-        static std::atomic<u32> logged{0};
-        const bool report = logged.fetch_add(1, std::memory_order_relaxed) < 48;
-        if (report) {
-            std::printf("Depth alias copy: route=%u src=0x%llx fmt=%u samples=%u %ux%u "
-                        "dst=0x%llx fmt=%u samples=%u %ux%u\n",
-                        u32(plan), (unsigned long long)src->info.guest_address,
-                        u32(src->info.pixel_format), src->info.num_samples,
-                        src->info.size.width, src->info.size.height,
-                        (unsigned long long)dst->info.guest_address,
-                        u32(dst->info.pixel_format), dst->info.num_samples,
-                        dst->info.size.width, dst->info.size.height);
-        }
-        switch (plan) {
-        case DepthAliasCopy::Direct:
-            CopyImage(src, dst);
-            return true;
-        case DepthAliasCopy::Buffer: {
-            const u64 copy_size = u64(src->info.size.width) * src->info.size.height *
-                                  src->info.size.depth * sizeof(float);
-            const auto copy_ref = staging_pool.Request(copy_size, VideoCore::MemoryType::DeviceLocal);
-            CopyImageWithBuffer(src, dst, copy_ref.buffer, copy_ref.offset);
-            return true;
-        }
-        case DepthAliasCopy::ColorToDepth:
-        case DepthAliasCopy::DepthToColor: {
+        if (plan == DepthAliasCopy::ColorToDepth || plan == DepthAliasCopy::DepthToColor) {
+            static std::atomic<u32> logged{0};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 48) {
+                std::printf("Depth alias copy: route=%u src=0x%llx fmt=%u samples=%u %ux%u "
+                            "dst=0x%llx fmt=%u samples=%u %ux%u\n",
+                            u32(plan), (unsigned long long)src->info.guest_address,
+                            u32(src->info.pixel_format), src->info.num_samples,
+                            src->info.size.width, src->info.size.height,
+                            (unsigned long long)dst->info.guest_address,
+                            u32(dst->info.pixel_format), dst->info.num_samples,
+                            dst->info.size.width, dst->info.size.height);
+            }
             SetBackingSamples(src, src->info.num_samples);
             SetBackingSamples(dst, dst->info.num_samples, false);
             scheduler.EndRendering();
@@ -625,15 +615,7 @@ bool Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
             dst->flags &= ~VideoCore::ImageFlagBits::Dirty;
             return true;
         }
-        case DepthAliasCopy::Unsupported:
-            if (report) LOG_WARNING(Render_Vulkan, "Depth alias transfer unsupported; source retained");
-            return false;
-        }
     }
-
-    // port: with THEORDER_NO_MSAA a guest multisampled depth target is single-sampled on the host; a
-    // colour image aliasing it still holds the samples as channels, so sample 0 is channel 0.
-    const bool guest_ms_depth = dst->info.props.is_depth && dst->info.guest_samples > 1;
     if (!VideoCore::CanCopyColorAndDepth(src->info.num_samples, dst->info.num_samples,
                                          dst->info.props.is_depth, dst->info.guest_samples)) {
         LOG_WARNING(Render_Vulkan,

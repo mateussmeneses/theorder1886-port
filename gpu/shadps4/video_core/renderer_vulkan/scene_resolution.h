@@ -29,9 +29,9 @@ inline Size GameSize() {
             return Size{1920, 800};
         }
         return lines == 2160 ? Size{3840, 2160}
-             : lines == 1080 ? Size{1920, 1080}
+             : lines == 800  ? Size{1920, 800}
              : lines == 720  ? Size{1280, 720}
-             : Size{1920, 800}; // retail default is 1920x800
+             : Size{1920, 1080}; // full 1080p vertical coordinate space unless 800 is requested
     }();
     return size;
 }

@@ -29,6 +29,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "video_core/renderer_vulkan/htile_expand.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "port_threads.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -3723,10 +3724,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
             regs.depth_control.depth_write_enable &&
             (is_depth_clear || !uncompressed_htiles.contains(htile_address))) {
             const auto& info = image.info;
-            const u32 tiles_x = Common::AlignUp((info.size.width + 7) / 8, 64u);
-            const u32 tiles_y = Common::AlignUp((info.size.height + 7) / 8, 64u);
             const u64 size = memory->ClampRangeSize(
-                htile_address, u64(tiles_x) * tiles_y * 4 * std::max<u32>(info.resources.layers, 1u));
+                htile_address, static_cast<u32>(VideoCore::HtileUncompressedSize(
+                                   info.size.width, info.size.height, info.resources.layers)));
             if (size) {
                 static constexpr u32 ZmaskUncompressed = 0xf;
                 const auto [buffer, offset] =

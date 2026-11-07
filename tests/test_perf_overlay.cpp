@@ -106,7 +106,11 @@ int main() {
                "overlay_cpu=1\noverlay_ram=0\noverlay_vram=1\noverlay_scale=400\noverlay_corner=2\n"
                "overlay_opacity=-5\noverlay_layout=1\nmenu_tab=2\noverlay_advanced=1\n";
     }
+    #ifdef _WIN32
     _putenv_s("THEORDER_CONFIG", path);
+#else
+    setenv("THEORDER_CONFIG", path, 1);
+#endif
     auto& v = PortSettings::Get();
     assert(v.overlay_items == P::DefaultItems && v.overlay_scale == 100 && v.overlay_corner == 1);
     PortSettings::Load();

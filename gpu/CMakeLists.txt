@@ -412,6 +412,17 @@ add_executable(blend-rewrite-test EXCLUDE_FROM_ALL ../tests/test_blend_rewrite.c
 target_compile_options(blend-rewrite-test PRIVATE -UNDEBUG)
 target_include_directories(blend-rewrite-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(blend-rewrite-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+# port (Linux): the GPU shared library references the loader stubs below; keep them
+# visible even where the test target compiles with -fvisibility=hidden (GNU ld rejects
+# a DSO reference to a hidden executable symbol: 'hidden symbol runtime_report ...
+# referenced by DSO').
+if(NOT WIN32)
+    set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
+endif()
+add_executable(htile-expand-test EXCLUDE_FROM_ALL ../tests/test_htile_expand.cpp)
+target_compile_options(htile-expand-test PRIVATE -UNDEBUG)
+target_include_directories(htile-expand-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(htile-expand-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
 add_executable(depth-alias-copy-test EXCLUDE_FROM_ALL ../tests/test_depth_alias_copy.cpp)
 target_compile_options(depth-alias-copy-test PRIVATE -UNDEBUG)
 target_include_directories(depth-alias-copy-test PRIVATE shim shadps4 third_party/gcn/include)

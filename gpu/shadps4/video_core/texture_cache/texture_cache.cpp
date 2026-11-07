@@ -1537,7 +1537,7 @@ ImageView& TextureCache::FindDepthTarget(ImageId image_id, const ImageDesc& desc
                                      .owner_uid = image.image_uid,
                                      .num_samples = image.info.num_samples,
                                      .clear_mask = image.info.meta_info.htile_clear_mask,
-                                     .htile_stencil = desc.info.props.has_stencil,
+                                     .htile_stencil = desc.info.props.has_stencil != 0,
                                  });
     }
 
@@ -1978,9 +1978,9 @@ void TextureCache::GarbageCollectImages() {
             const u64 budget = instance.GetDeviceMemoryBudgetNow();
             if (budget != 0) {
                 const u64 process_cap = 3072_MB;
-                trigger_gc_memory = std::min(budget / 10 * 6, process_cap);
-                pressure_gc_memory = std::min(budget / 100 * 80, process_cap + 512_MB);
-                critical_gc_memory = std::min(budget / 100 * 90, process_cap + 1024_MB);
+                trigger_gc_memory = std::min<u64>(budget / 10 * 6, process_cap);
+                pressure_gc_memory = std::min<u64>(budget / 100 * 80, process_cap + 512_MB);
+                critical_gc_memory = std::min<u64>(budget / 100 * 90, process_cap + 1024_MB);
             }
         }
     }

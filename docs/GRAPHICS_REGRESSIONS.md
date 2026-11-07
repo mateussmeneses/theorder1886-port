@@ -1,5 +1,42 @@
 # Graphics regression checkpoint
 
+## 2026-11-06: RDNA4 (RX 9070 XT) verification of the sun-shadow fix chain - #26
+
+**Hardware / build:** AMD RX 9070 XT (Mesa RADV GFX1201) on Fedora Atomic (Bazzite),
+Chapter I "A Lady in Waiting" (1-1 opening alley and terrace), 30 FPS baseline,
+`THEORDER_HTILE_DRAW_EXPAND` at its default (on). Player-owned dump; no dumps,
+saves or personal paths attached.
+
+**Staged A/B on the same checkpoint and save:**
+
+1. Sun readback synchronization alone (`KeepPageSynchronized`, as merged in the sibling
+   JulioCacko port via its PR #143): cutscene sunlight and shadows return; **gameplay
+   keeps flat lighting** - no dynamic shadows on the cart, crates, sandbags, NPCs or
+   fence, and the sun patch lands on the wrong surfaces.
+2. Adding the HTILE draw-expand half: gameplay is fixed. Cart/crate/sandbag/fence/NPC
+   directional shadows, sun patch on the ivy wall, wet-cobble specular. Player-confirmed
+   on the Chapter I checkpoint.
+
+**Direct evidence for the mechanism (frame capture + image dumps, instrumented build):**
+
+- The sun cascade maps (D32 1024x1024, two array layers) DO receive the caster draws in
+  both cases (depth-target draw histogram: ~690k and ~548k draws; decoded dumps show the
+  fence, buildings and cart geometry).
+- With the HTILE expand OFF, the EVSM conversion (`0x8ea0ef5b`) writes a **constant**
+  moment texture (all four quadrants = exp(k x far), a single distinct value): the
+  depth->shader-read path serves the cleared HTILE state - exactly Area 2's failure model.
+- With the expand ON, the same texture carries real depth (channel 0 range 0.014..54.5,
+  structure matching the cascade geometry).
+- Boot log confirms the expansion on eight depth surfaces, e.g.
+  `HTILE: 0x104e331800 marked uncompressed, 131072 bytes` - the size matches the
+  1024x1024x2-layers tile grid (`tests/test_htile_expand.cpp`).
+
+**Conclusion for #26:** on RDNA4 the HTILE draw-expand is the decisive half; sun readback
+sync alone does not restore gameplay shadows. The merged fix chain is verified working on
+this architecture. The RTX 4050 (NVIDIA) report predates the `7cf7979` merge and should be
+retested against a build containing it; if it still fails on NVIDIA, the constant-vs-real
+EVSM test above separates an HTILE cause from a different one in a single capture.
+
 ## 2026-11-01: comprehensive graphics fidelity, temporal stability, and VRAM management investigation (Prompts 4, 5, 6 & 7)
 
 Comprehensive investigation and remediation of graphics fidelity regressions, flickering, incorrect shadows, unstable lighting, temporal reprojection jitter, and resource management across the 12 mandatory investigation areas comparing `theorder1886-port` against `TOport` (reference checkout at `ceebdf3`). Changes are isolated into six independent PR branches with dedicated A/B rollback environment variables.

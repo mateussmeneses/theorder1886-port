@@ -1,0 +1,204 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "The Order: 1886",
+  "repo": "mateussmeneses/theorder1886-port",
+  "game": {
+    "kind": "folder",
+    "label": "Your extracted The Order: 1886 PS4 game folder (CUSA00035 v01.02 tested)",
+    "check": {
+      "file": "eboot.bin"
+    }
+  },
+  "start": {
+    "program": [
+      "The Order 1886.exe"
+    ],
+    "args": [
+      "--play"
+    ]
+  },
+  "prepare": {
+    "program": [
+      "The Order 1886.exe"
+    ],
+    "args": [
+      "--recomplauncher-prepare",
+      "{game}"
+    ],
+    "label": "Check the PS4 game folder",
+    "timeout": 30
+  },
+  "config": [
+    {
+      "id": "launcher",
+      "format": "json",
+      "file": [
+        {
+          "path": "{install}/settings.json"
+        }
+      ],
+      "game_path": "game_dir"
+    },
+    {
+      "id": "graphics",
+      "format": "ini",
+      "file": [
+        {
+          "path": "{install}/theorder.ini"
+        }
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "id": "display_mode",
+      "label": "Display mode",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Windowed",
+          "set": {
+            "display_mode": "windowed"
+          }
+        },
+        {
+          "label": "Borderless",
+          "set": {
+            "display_mode": "borderless"
+          }
+        },
+        {
+          "label": "Fullscreen",
+          "set": {
+            "display_mode": "fullscreen"
+          }
+        }
+      ],
+      "defaults": {
+        "display_mode": "windowed"
+      }
+    },
+    {
+      "id": "output_res",
+      "label": "Output resolution",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "720p",
+          "set": {
+            "output_res": "1280x720"
+          }
+        },
+        {
+          "label": "1080p",
+          "set": {
+            "output_res": "1920x1080"
+          }
+        },
+        {
+          "label": "1440p",
+          "set": {
+            "output_res": "2560x1440"
+          }
+        },
+        {
+          "label": "4K",
+          "set": {
+            "output_res": "3840x2160"
+          }
+        }
+      ],
+      "defaults": {
+        "output_res": "1920x1080"
+      }
+    },
+    {
+      "id": "vsync",
+      "label": "VSync",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "vsync": "0"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "vsync": "1"
+          }
+        }
+      ],
+      "defaults": {
+        "vsync": "1"
+      }
+    },
+    {
+      "id": "fps_limit",
+      "label": "Frame rate limit",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Unlimited",
+          "set": {
+            "fps_limit": "0"
+          }
+        },
+        {
+          "label": "30 fps",
+          "set": {
+            "fps_limit": "30"
+          }
+        },
+        {
+          "label": "60 fps",
+          "set": {
+            "fps_limit": "60"
+          }
+        },
+        {
+          "label": "120 fps",
+          "set": {
+            "fps_limit": "120"
+          }
+        },
+        {
+          "label": "240 fps",
+          "set": {
+            "fps_limit": "240"
+          }
+        }
+      ],
+      "defaults": {
+        "fps_limit": "0"
+      }
+    },
+    {
+      "id": "show_fps",
+      "label": "Performance overlay",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "show_fps": "0"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "show_fps": "1"
+          }
+        }
+      ],
+      "defaults": {
+        "show_fps": "1"
+      }
+    }
+  ],
+  "saves": [
+    "{install}/user/savedata"
+  ]
+}

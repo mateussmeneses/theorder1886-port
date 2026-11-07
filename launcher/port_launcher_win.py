@@ -551,6 +551,26 @@ def describe_missing(missing):
     return [labels[state].format(name) if state in labels else name for name, state in missing]
 
 
+def recomplauncher_prepare(args):
+    """Check the selected dump without opening a window or changing its files."""
+    attach_stdio()
+    if len(args) != 1:
+        print('Usage: --recomplauncher-prepare <game folder>', file=sys.stderr)
+        return 2
+    game = Path(args[0])
+    print('progress 0.1 Checking the PS4 game folder', flush=True)
+    if missing := missing_game_files(game):
+        details = ', '.join(f'{name} ({state})' for name, state in missing)
+        print(f'progress 0.1 Incomplete or unreadable game folder: {details}', flush=True)
+        return 1
+    title_id = game_sfo(game).get('TITLE_ID')
+    if not game_profile(title_id):
+        print('progress 0.1 Select a supported The Order: 1886 PS4 game folder.', flush=True)
+        return 1
+    print('progress 1 Game folder checked', flush=True)
+    return 0
+
+
 def ready_to_play(game_dir, update_dir=''):
     """Whether --play (Steam, "Play The Order 1886.exe") may start the game at once; anything
     the Play button would refuse opens the launcher window instead."""
@@ -2712,6 +2732,8 @@ def install_update(target, wait_pid):
 def main():
     global LANG
     args = sys.argv[1:]
+    if args[:1] == ['--recomplauncher-prepare']:
+        sys.exit(recomplauncher_prepare(args[1:]))
     if args and args[0] in ('--run', '--script'):
         sys.exit(run_role(args))
     settings = {**APP_DEFAULTS, **load_json(CONFIG_FILE, {})}

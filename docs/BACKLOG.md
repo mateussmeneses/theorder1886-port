@@ -1,10 +1,36 @@
 # Backlog de Desenvolvimento & Resolução de Issues — The Order: 1886 PC Port
 
-Estado atual consultado em 2026-10-25: GitHub lista 28 issues abertas. A seção
-abaixo é a referência vigente; as seções históricas mantidas depois dela não são
+Estado consultado em 2026-11-09: 38 issues abertas (seção "Atualização 2026-11-09"); a tabela de
+2026-10-25 abaixo continua válida para as issues antigas; as seções históricas mantidas depois dela não são
 um status atual nem evidência de que um issue foi corrigido. Prioridade organiza
 a ordem de investigação, não promete implementação nem substitui reteste em
 hardware/cena reportados.
+
+## Atualização 2026-11-09 (38 issues abertas)
+
+Issues novas desde 2026-10-25 e o que já foi verificado localmente. Rascunhos de resposta em
+`docs/ISSUE_REPLY_DRAFTS_2026-11-09.md` (nada publicado).
+
+| Prioridade | Issue | Resumo | Estado observado / próxima ação |
+| :---: | :---: | :--- | :--- |
+| P1 | [#113](https://github.com/mateussmeneses/theorder1886-port/issues/113) | Stalls de pipeline voltam após reiniciar | Reproduzido: cadeia de 5 sessões na rota do prólogo; nenhum pipeline salvo é recompilado, os stalls vêm de permutações novas do shader de material (98 → 56 → 50 → 40 por sessão). `docs/PIPELINE_SESSION_REBUILDS.md`. Redução possível listada lá, não implementada. |
+| P1 | [#65](https://github.com/mateussmeneses/theorder1886-port/issues/65) | Não inicia em Intel de 2ª/3ª geração | Reproduzido o caminho forçado: a reescrita não emula F16C (5 sites `vcvtph2ps`), então Sandy Bridge (2ª geração) para no início com `STOP … 5 sites`. Caminho da Ivy Bridge (3ª) em teste com `THEORDER_ISA_REWRITE=MOVBE,BMI1,LZCNT`. Executável do port sem AVX2/FMA/BMI2. |
+| P1 | [#101](https://github.com/mateussmeneses/theorder1886-port/issues/101) | QTE de apertar botão não termina acima de 30 FPS | Relatos indicam dependência da taxa de quadros; lógica no `ButtonMashNode` do eboot. Não reproduzido localmente. |
+| P1 | [#116](https://github.com/mateussmeneses/theorder1886-port/issues/116) | Tela preta (RX 6500 XT), 0.6.1 funciona | Mesma família de #47. O zip do relatório veio sem log: defeito do exportador corrigido (`af81721`). Falta o `last_run.log`. |
+| P1 | [#98](https://github.com/mateussmeneses/theorder1886-port/issues/98) | Série 0.7: tela preta em gameplay/FMV, 0.6.1 funciona (RTX 5090) | Log mostra o jogo apresentando frames e compilando pipelines; causa não identificada. |
+| P1 | [#115](https://github.com/mateussmeneses/theorder1886-port/issues/115) | Erros gráficos (RX 580, v0.8.0) | Capturas mostram molduras/armadura brancas superexpostas; o fallback do formato de normais também roda na NVIDIA local sem esse sintoma. Falta log completo. |
+| P2 | [#114](https://github.com/mateussmeneses/theorder1886-port/issues/114) | FPS baixo e stutter (RTX 3050) | Sem log. |
+| P2 | [#100](https://github.com/mateussmeneses/theorder1886-port/issues/100) | Nenhum upscaler funciona (RTX 3070 Ti, 2560x1080) | Sem log. |
+| P2 | [#99](https://github.com/mateussmeneses/theorder1886-port/issues/99) | Texturas ausentes e flicker (RTX 5090) | Sem log; outro usuário sugere 0.6.1. |
+| P2 | [#95](https://github.com/mateussmeneses/theorder1886-port/issues/95) | Flicker de texturas | Sem dados de hardware. |
+| P2 | [#102](https://github.com/mateussmeneses/theorder1886-port/issues/102) | Cache de pipeline do driver vazio | Correção proposta é proibida pela especificação Vulkan (VUIDs 09616/09617), confirmado pelo autor. |
+| P3 | [#107](https://github.com/mateussmeneses/theorder1886-port/issues/107) | Instalação de DLC | Feature request. |
+| P3 | [#83](https://github.com/mateussmeneses/theorder1886-port/issues/83) | Port para Mac | Feature request. |
+| P3 | [#71](https://github.com/mateussmeneses/theorder1886-port/issues/71) | `port_dlss.dll` | Respondida: ponte DLSS opcional, não incluída no pacote. |
+
+Falhas de boot locais ainda abertas (plano `docs/plans/2026-11-09-autonomous-backlog.md`, S1/S2):
+destruição do contexto FSR 4 no frame 1 (2 em 50 execuções) e falha no driver NVIDIA na espera de
+fence do presenter (1 em 50).
 
 ## Relatos locais em investigação
 

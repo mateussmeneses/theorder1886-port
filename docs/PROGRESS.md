@@ -2,6 +2,30 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-09 (evening): autonomous backlog session
+
+Plan and diary: `docs/plans/2026-11-09-autonomous-backlog.md`; branch `auto/backlog-20261109`.
+
+- **#113 explained (`docs/PIPELINE_SESSION_REBUILDS.md`):** a five-session chain on the prologue
+  route shows saved pipelines are never compiled again; the stalls after a restart are new
+  material-shader permutations (98, 56, 50, 40 new pipelines per session), 64 of 72 differing from
+  an existing permutation in one texture slot (2D/3D view, sRGB, integer format).
+  `THEORDER_PERMUTATION_LOG` now names the closest existing permutation. No behavior change.
+- **#65 old CPUs (`docs/OLD_CPU_ISA_PATH.md`):** Sandy Bridge could not start (5 F16C sites the
+  rewrite did not emulate); `vcvtph2ps xmm, xmm` is now emulated by the int3 handler on Windows.
+  `THEORDER_ISA_REWRITE` takes a list of sets (`MOVBE+BMI1+LZCNT` = Ivy Bridge). Not verified on
+  real Sandy/Ivy hardware.
+- **Bug reports (#116):** the launcher's export now carries `last_run.log` and the port version.
+- **`batch_runs`:** names `EXCEPTION std::bad_alloc` / `STOP …` instead of HUNG / EXIT 23.
+- **Readback diagnosis:** `THEORDER_READBACK_TICK_LOG=1` classifies the newest GPU write behind
+  each synchronous download (open command buffer, submitted, complete): input for hypothesis 1 of
+  `docs/GPU_READBACK_INVESTIGATION.md`.
+- **Boot faults S1/S2** (FSR 4 teardown at frame 1, 2 in 50 runs; NVIDIA fence wait, 1 in 50):
+  analysed, still open; the FSR 4 one is heap corruption of an unused object, not a double
+  destruction (recording is single-threaded at that point).
+- Issue triage for the 38 open issues in `docs/BACKLOG.md`; reply drafts (not posted) in
+  `docs/ISSUE_REPLY_DRAFTS_2026-11-09.md`.
+
 ## 2026-11-09: `THEORDER_TASK_IDLE` under restricted CPU affinity (measurement only)
 
 - **Method:** `tools/batch_runs.py --affinity MASK` (new, opt-in; the game's process tree inherits

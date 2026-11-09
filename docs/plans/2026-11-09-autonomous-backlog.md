@@ -162,3 +162,54 @@ FSR 4 no boot: 2 ocorrências em 50 execuções. Totais nos 5 lotes: base 24/25,
   para datar a corrupção; ou page heap com autorização do usuário.
 - S3 dispensado: a taxa já está medida (3 falhas de boot em 54 execuções do build corrigido,
   0 em 44 do v0.8.0, Fisher p = 0,25).
+
+### Relatório de bug sem log (#116) — corrigido (`af81721`)
+
+O exportador do launcher usava só a caixa de log, vazia depois de reabrir o launcher. Agora usa o
+`last_run.log` da pasta de saves (últimos 4 MiB, linhas inteiras), cai para a caixa se não houver
+arquivo, diz a fonte no `report.md` e inclui a versão do pacote. 6 testes novos.
+
+### P1 (#113) — causa encontrada; diagnóstico melhorado (`ba9f698`)
+
+Cadeia de 5 sessões na rota do prólogo (`docs/PIPELINE_SESSION_REBUILDS.md`): nenhum pipeline
+salvo é recompilado; cada sessão traz permutações novas do shader de material (98, 56, 50, 40
+pipelines novos). 64 de 72 permutações novas diferem da mais próxima em um único slot de textura.
+`THEORDER_PERMUTATION_LOG` agora compara com a permutação existente mais próxima. Redução
+possível (sRGB com SPIR-V idêntico, ~7 %) registrada, não implementada. P2-P4 ficam reformulados
+por esse resultado.
+
+### Q1 — `batch_runs` nomeia exceções e STOP (`1cf2aff`)
+
+`EXCEPTION std::bad_alloc` e `STOP <motivo>` em vez de HUNG/EXIT 23. Nos 98 logs anteriores:
+9 bad_alloc, 5 faults, 1 HUNG, 83 ok, igual à apuração manual.
+
+### G1/G6 — triagem e rascunhos (`4eeded5`)
+
+`docs/BACKLOG.md` com as 38 issues; `docs/ISSUE_REPLY_DRAFTS_2026-11-09.md` (nada publicado).
+
+### C2 (#65) — CPUs antigas
+
+- Executável do port: sem AVX2/FMA/BMI2/F16C/MOVBE/LZCNT; só `tzcnt`, que executa como `bsf`
+  em CPUs sem BMI1 (mesmo resultado para entrada não nula, padrão do compilador).
+- `THEORDER_ISA_REWRITE=1` nesta máquina: 3/3 execuções param na partida com
+  `STOP … 5 sites use encodings the rewrite cannot emulate`. Os 5 são `vcvtph2ps xmmN, xmmN`
+  (F16C), que a reescrita nunca emulava: Sandy Bridge (2ª geração, sem F16C) não iniciava.
+- Implementado: `vcvtph2ps xmm, xmm` vira int3 e o handler do Windows converte no CONTEXT
+  (XMM + metade alta do YMM zerada pelo XState). Conversão testada contra o F16C desta CPU nos
+  65536 valores; teste ponta a ponta no `isa-stub-test`; mutações (NaN sem quiet bit, YMM alto
+  não zerado) detectadas.
+- `THEORDER_ISA_REWRITE` aceita uma lista (`MOVBE+BMI1+LZCNT` = Ivy Bridge) para exercitar o
+  caminho de cada geração nesta máquina.
+- Resultado em jogo (3 + 3 + 3, prólogo): nativo, Ivy e Sandy completam todas; a reescrita sobe o
+  P99 de 18 para 31 ms nesta CPU (`docs/OLD_CPU_ISA_PATH.md`). Commit `5166815`. Sem hardware
+  real de 2ª/3ª geração: confirmação do reporter pendente.
+- Defeito encontrado no caminho: o carregador C rejeitava a tabela com int3 de 5 bytes, e no modo
+  forçado o jogo seguia sem reescrita (lote anterior inválido, descartado). Agora o modo forçado
+  sem tabela para.
+
+### R1 — instrumentação de readbacks (`cf3c84c`)
+
+`THEORDER_READBACK_TICK_LOG=1` classifica a escrita mais recente da GPU atrás de cada download
+síncrono. Medido (2 × 125 s): 90 % dos downloads têm o escritor no command buffer ainda aberto
+(99-100 % no gameplay). Hipótese 1 refutada como alavanca principal; R2 não implementado. Detalhes em
+`docs/GPU_READBACK_INVESTIGATION.md`.

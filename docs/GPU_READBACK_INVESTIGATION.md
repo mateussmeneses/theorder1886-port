@@ -78,5 +78,24 @@ slot and a GPU-written range, not a CPU read of GPU data.
    download. Needs proof that the copied-back bytes are the latest GPU write for that page at the
    time of the fault (tick ordering), otherwise it is stale data.
 
+### Hypothesis 1 measured (2026-11-09): mostly refuted
+
+`THEORDER_READBACK_TICK_LOG=1` (`cf3c84c`) records the scheduler tick of the last GPU write per
+4 KiB page and classifies the newest write behind every synchronous download. Prologue route,
+2 runs × 125 s, warm cache (`out/r1/manifest-r1.json` in the worktree):
+
+| Run | Sync downloads | Writer in the open command buffer | Submitted, running | Complete |
+|---|---|---|---|---|
+| 1 | 6943 | 6265 (90.2 %) | 25 | 653 |
+| 2 | 6977 | 6272 (89.9 %) | 14 | 691 |
+
+In gameplay windows 99-100 % are in the open command buffer (e.g. 270 of 272 in one 5 s
+window); the complete ones cluster in the loading part. The newest write to the downloaded range
+is recorded in the very command buffer being built when the game's store faults, so submitting it
+and waiting (`Finish()`) is required: a wait on an older tick would return stale bytes. A tick
+wait could only shortcut ~10 % of downloads. Hypotheses 2 (smaller window, copy cost) and 3
+(serve the store from the read-watch copy) do not depend on the writer's age; 3 would have to
+prove that copy is newer than a write still unsubmitted, which this measurement makes unlikely.
+
 Each of these needs a capture-matched A/B (same route, warm cache, frame traces, image
 comparison of the scene) before it can ship.

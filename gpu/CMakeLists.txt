@@ -476,6 +476,11 @@ target_compile_options(swapchain-policy-test PRIVATE -UNDEBUG -Wall -Wextra -Wer
 target_include_directories(swapchain-policy-test PRIVATE shadps4)
 target_link_libraries(swapchain-policy-test PRIVATE Vulkan::Headers)
 
+# WaitGraphics retirement of a waited build against the real tsl::robin_map; no Vulkan device.
+add_executable(pending-builds-test EXCLUDE_FROM_ALL ../tests/test_pending_builds.cpp)
+target_compile_options(pending-builds-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(pending-builds-test PRIVATE shadps4)
+target_link_libraries(pending-builds-test PRIVATE tsl::robin_map)
 add_executable(async-pipeline-cache-test EXCLUDE_FROM_ALL ../tests/test_async_pipeline_cache.cpp)
 target_compile_options(async-pipeline-cache-test PRIVATE -UNDEBUG)
 target_include_directories(async-pipeline-cache-test PRIVATE shadps4)

@@ -8,7 +8,7 @@ cd -- "$(dirname -- "$0")/.."
 tests=(mp3 videodec services pad-map pad audio-downmix cpu-check isa-emulate isa-stub tsc-clock task-idle
        pipeline-binary-cache pipeline-binary-trim pipeline-binary-initialization motion-history motion-shader buffer-addr64 buffer-inline png-decode
        aliasing blend-rewrite depth-stencil-state depth-alias-copy htile-expand face-workers-guard async-compiler warmup-inbox wave-stats pass-census
-       frame-capture lighting-test-knob amd-paths no-msaa async-pipeline-cache async-fetch-snapshot
+       frame-capture lighting-test-knob amd-paths no-msaa async-pipeline-cache pending-builds async-fetch-snapshot
        ui-composition upscaler-support perf-overlay overlay-input compute-pipeline-reuse readback-queue wait-diagnostics
        graphics-settings readback-sources page-state scene-resolution taa-shader camera-motion dma-barriers
        renderpass-barrier shader-resource format-remap multiwave-barriers formatted-ssbo-barriers

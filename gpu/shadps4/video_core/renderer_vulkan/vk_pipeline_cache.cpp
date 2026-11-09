@@ -35,6 +35,7 @@
 #include "video_core/renderer_vulkan/vk_draw_prep.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_lighting_test.h"
+#include "video_core/renderer_vulkan/vk_pending_builds.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "bb_face_depth_fix.h"
@@ -1041,11 +1042,17 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
     // dropped (object pops in/out). Stall this one draw on exactly that one build instead of
     // skipping it. We wait on a single key's in-flight job and retire it with the same steps the
     // PublishGraphics loop body uses for a completed build; never the whole pending_graphics set.
-    const auto it = pending_graphics.find(key);
-    if (it == pending_graphics.end()) {
+    // The wait below publishes shaders, which drains deferred selections into pending_graphics:
+    // no iterator into it may outlive the wait (see RetirePendingBuild).
+    std::shared_ptr<AsyncGraphicsCompilation> build;
+    if (const auto it = pending_graphics.find(key); it != pending_graphics.end()) {
+        build = it.value();
+    } else {
         return nullptr;
     }
-    auto build = it.value();
+    static const bool log_wait = std::getenv("THEORDER_PENDING_WAIT_LOG") != nullptr;
+    const size_t size_before = pending_graphics.size();
+    const size_t buckets_before = pending_graphics.bucket_count();
     {
         PhaseTimer waiting{g_port_compile_wait_ns};
         static const bool prioritize = [] {
@@ -1065,6 +1072,14 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
         }
         build->job.Wait();
     }
+    if (log_wait && (pending_graphics.size() != size_before ||
+                     pending_graphics.bucket_count() != buckets_before)) {
+        LOG_WARNING(Render_Vulkan,
+                    "port: pending pipelines changed while waiting for {:#x}: {} -> {} entries, "
+                    "{} -> {} buckets",
+                    std::hash<GraphicsPipelineKey>{}(key), size_before, pending_graphics.size(),
+                    buckets_before, pending_graphics.bucket_count());
+    }
     if (last_lookup_pending && last_pending_key == key) {
         last_lookup_pending = false;
     }
@@ -1081,7 +1096,7 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
             LOG_ERROR(Render_Vulkan, "port: pipeline {:#x} compilation failed: {}",
                       std::hash<GraphicsPipelineKey>{}(key), build->job.Error());
         }
-        pending_graphics.erase(it);
+        RetirePendingBuild(pending_graphics, key, build);
         return pipeline;
     }
     build->pipeline->PublishStages(build->live_infos);
@@ -1090,7 +1105,7 @@ const GraphicsPipeline* PipelineCache::WaitGraphics(const GraphicsPipelineKey& k
     // emplace can discard the pipeline owned by this completed on-demand build.
     const auto published = graphics_pipelines.emplace(key, std::move(build->pipeline)).first;
     ++num_new_pipelines;
-    pending_graphics.erase(it);
+    RetirePendingBuild(pending_graphics, key, build);
     return published->second && !published->second->Failed() ? published->second.get() : nullptr;
 }
 

@@ -63,9 +63,24 @@ Prologue route, 125 s, warm cache, conditions interleaved, 3 runs each, same bui
   stutters per minute doubled): the stubs call the emulator for every executed site, and BMI1 has
   1869 sites. On a 2011-2012 CPU the cost will be higher. Whether the five F16C sites executed on
   this route is not recorded (the hit report is printed only on a fault).
-- Next step if old CPUs matter: rank sites by hits (`isa_rewrite_report`) and emit inline
-  sequences for the hottest kinds (e.g. `tzcnt` → `bsf` with a zero check) instead of calling
-  the emulator.
+
+### After inlining MOVBE loads (`fd773d3`)
+
+The hit report (now printed at the end of every timed run with a table) showed ~286 M emulator
+calls in 125 s: MOVBE 149 M (one `movbe eax,[r12]` site 114 M, ~900 k/s), BEXTR 111 M, ANDN 17 M,
+LZCNT 8 M, BLSR 1.2 M, TZCNT 0.2 M, and the five F16C sites 30 k (so the int3/XMM path did run).
+MOVBE loads now run inline (MOV + BSWAP). Interleaved A/B, same route, 3 runs each
+(`out/c3/manifest-c3c.json`):
+
+| Path | Complete | FPS | P95 ms | P99 ms | Worst ms | Stutters/min |
+|---|---|---|---|---|---|---|
+| native | 3/3 | 58.5 / 58.4 / 58.3 | 17.5 | 18.1 / 18.0 / 18.0 | 702 / 687 / 603 | 22.5 / 20.0 / 23.4 |
+| Sandy Bridge path | 3/3 | 57.7 / 58.1 / 58.1 | 17.5 | 18.2 / 18.3 / 18.0 | 1087 / 644 / 644 | 28.5 / 28.5 / 28.0 |
+| Ivy Bridge path | 3/3 | 58.2 / 57.6 / 58.0 | 17.5 | 18.1 / 18.0 / 18.1 | 621 / 1000 / 625 | 27.5 / 26.5 / 26.9 |
+
+P99 is back to native; the rewritten paths still show ~25 % more stutters per minute and one
+~1 s worst frame each. The remaining emulator calls are mostly BEXTR (flags: ZF defined, CF/OF
+cleared), the next candidate for an inline sequence if older CPUs need more.
 
 ## Not verified
 

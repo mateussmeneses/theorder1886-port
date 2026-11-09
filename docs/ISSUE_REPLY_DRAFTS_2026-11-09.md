@@ -91,13 +91,17 @@ yet, so there is no fix to test.
 
 ## #65 — Does not start on 2nd/3rd generation Intel CPUs
 
-(Fill in with the forced-rewrite A/B result from `docs/plans/2026-11-09-autonomous-backlog.md`
-before posting.)
+Found and fixed a real cause for 2nd generation (Sandy Bridge). The game's code uses a few
+instructions those CPUs lack, and the port rewrites them at start; five of them (F16C,
+`vcvtph2ps`) were never handled, so on Sandy Bridge the port stopped right away with
+`STOP: … 5 sites use encodings the rewrite cannot emulate`. They are emulated now. On the route
+I measured, the rewritten code now has the same 99th-percentile frame time as unrewritten code,
+with somewhat more stutters (about 28 instead of 22 per minute) (`docs/OLD_CPU_ISA_PATH.md`). 3rd generation (Ivy Bridge) did not hit that stop; its path was
+also exercised and plays the prologue.
 
-Please attach `last_run.log` from a failed start and the exact CPU model. The port checks the
-CPU at start: Sandy/Ivy Bridge lack some instructions the PS4 code uses (MOVBE, F16C, BMI1,
-LZCNT), and the port rewrites those sites; the first lines of the log say whether that happened
-(`CPU: missing …`, `ISA: CPU lacks …`) or why it stopped (`STOP: …`).
+I tested this by forcing the same rewrite on a newer CPU, not on a real 2nd/3rd generation one.
+When the next build is out, please try it and attach `user/last_run.log`; the first lines say
+`CPU: missing …` and `ISA: …` with what was rewritten. Please also say the exact CPU model.
 
 ---
 
@@ -116,3 +120,13 @@ Thanks. Please attach the bug report zip (or `user/last_run.log`) from a run wit
 selected. The log line starting with `Upscaler:` says whether it was active, which provider ran,
 and why one was refused; without it I cannot tell a missing provider from a 2560x1080 output
 problem.
+
+---
+
+## #40 — CPU load 100%
+
+v0.8.0 changed how the port's job workers wait: they now sleep instead of spinning when there is
+no work (`THEORDER_TASK_IDLE=2`, the default). On my machine the game went from about 5 busy
+cores to about 2 on the same scene, with equal or better frame times (`docs/PERFORMANCE_BASELINE.md`,
+2026-11-09). Could you retest with v0.8.0 and say whether the load is still at 100%? If it is,
+the launcher's "Export Bug Report (.zip)" after a few minutes of play gives me the CPU numbers.

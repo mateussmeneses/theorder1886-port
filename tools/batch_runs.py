@@ -12,6 +12,7 @@ drift (shader cache warming, temperature) affects all of them alike. Logs land i
 a run fails on a fault or when it stops presenting before the timeout (fewer stats windows).
 """
 import argparse
+import contextlib
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -32,6 +33,48 @@ from regression_report import compare_captures, parse_log, write_reports
 
 ROOT = Path(__file__).resolve().parent.parent
 GAME_DIR = os.environ.get('THEORDER_GAME_DIR') or str(ROOT.parent / 'CUSA00035')
+
+
+def parse_affinity(text):
+    """A CPU affinity mask from hex (0x5500) or decimal text; it must name at least one CPU."""
+    try:
+        mask = int(text, 0)
+    except ValueError:
+        raise ValueError(f'not a CPU mask: {text!r}') from None
+    if mask <= 0 or mask >= 1 << 64:
+        raise ValueError(f'CPU mask must select 1 to 64 logical processors: {text!r}')
+    return mask
+
+
+@contextlib.contextmanager
+def inherited_affinity(mask):
+    """Windows: the runner takes mask only while it starts a child, which inherits it (as do the
+    game and its threads, started by that child); the runner's own mask is restored at once.
+    The runtime records guest thread affinity without applying it (src/runtime_thread.c)."""
+    if mask is None:
+        yield
+        return
+    if os.name != 'nt':
+        raise RuntimeError('--affinity is implemented for Windows only')
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    pointer = ctypes.POINTER(ctypes.c_size_t)
+    kernel32.GetProcessAffinityMask.argtypes = (wintypes.HANDLE, pointer, pointer)
+    kernel32.SetProcessAffinityMask.argtypes = (wintypes.HANDLE, ctypes.c_size_t)
+    process = kernel32.GetCurrentProcess()
+    current, system = ctypes.c_size_t(), ctypes.c_size_t()
+    if not kernel32.GetProcessAffinityMask(process, ctypes.byref(current), ctypes.byref(system)):
+        raise OSError(ctypes.get_last_error(), 'GetProcessAffinityMask failed')
+    if mask & ~system.value:
+        raise ValueError(f'CPU mask {mask:#x} names processors outside the system mask {system.value:#x}')
+    if not kernel32.SetProcessAffinityMask(process, ctypes.c_size_t(mask)):
+        raise OSError(ctypes.get_last_error(), 'SetProcessAffinityMask failed')
+    try:
+        yield
+    finally:
+        kernel32.SetProcessAffinityMask(process, current)
 
 
 def kill_orphans():
@@ -297,9 +340,16 @@ def main():
                         help='luma delta threshold used only for changed-pixel reporting')
     parser.add_argument('--manifest', type=Path, help='JSON manifest destination')
     parser.add_argument('--report-dir', type=Path, help='Markdown/HTML report destination')
+    parser.add_argument('--affinity', default='',
+                        help='Windows: CPU affinity mask for the game process tree, e.g. 0x5500 '
+                             '(opt-in; the runner itself is not restricted)')
     parser.add_argument('--kill-existing', action='store_true',
                         help='legacy opt-in: kill every theorder-probe.exe before the batch')
     args = parser.parse_args()
+    try:
+        affinity = parse_affinity(args.affinity) if args.affinity else None
+    except ValueError as error:
+        parser.error(str(error))
     if args.runs < 1 or args.secs < 1:
         parser.error('--runs and --secs must be positive')
     if args.present_frames < 0:
@@ -368,6 +418,7 @@ def main():
         'cache_state_by_condition': cache_states,
         'cache_state_note': 'Port user shader/pipeline cache only; OS and driver caches are not controlled.',
         'raw_format': args.raw_format,
+        'cpu_affinity': f'{affinity:#x}' if affinity is not None else None,
         'host': {
             'platform': platform.platform(), 'system': platform.system(),
             'release': platform.release(), 'machine': platform.machine(),
@@ -458,10 +509,11 @@ def main():
             started = time.monotonic()
             actions = []
             with open(log_path, 'w', encoding='utf-8', errors='replace') as f:
-                process = subprocess.Popen(
-                    [sys.executable, str(ROOT / 'run.py')] + args.game_args.split(),
-                    env=env, cwd=ROOT, stdin=subprocess.DEVNULL,
-                    stdout=f, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
+                with inherited_affinity(affinity):
+                    process = subprocess.Popen(
+                        [sys.executable, str(ROOT / 'run.py')] + args.game_args.split(),
+                        env=env, cwd=ROOT, stdin=subprocess.DEVNULL,
+                        stdout=f, stderr=subprocess.STDOUT, start_new_session=(os.name != 'nt'))
                 if args.pad and pad_file:
                     actions.append(threading.Thread(target=play_pad,
                                                     args=(args.pad, pad_file, stop), daemon=True))

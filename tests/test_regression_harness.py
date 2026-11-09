@@ -24,6 +24,44 @@ fault_stacks = load_tool('fault_stacks')
 batch_runs = load_tool('batch_runs')
 
 
+class BatchAffinityTest(unittest.TestCase):
+    def test_affinity_masks_parse_and_reject_empty_or_invalid(self):
+        self.assertEqual(batch_runs.parse_affinity('0x5500'), 0x5500)
+        self.assertEqual(batch_runs.parse_affinity('21760'), 0x5500)
+        for bad in ('0', '-1', 'cores', str(1 << 64)):
+            with self.assertRaises(ValueError):
+                batch_runs.parse_affinity(bad)
+
+    def test_no_mask_is_a_no_op(self):
+        with batch_runs.inherited_affinity(None):
+            pass
+
+    @unittest.skipUnless(sys.platform == 'win32', 'process affinity inheritance is Windows-only here')
+    def test_child_inherits_the_mask_and_the_runner_keeps_its_own(self):
+        import ctypes
+        import subprocess
+        probe = ('import ctypes;k=ctypes.windll.kernel32;k.GetCurrentProcess.restype=ctypes.c_void_p;'
+                 'a=ctypes.c_size_t();b=ctypes.c_size_t();'
+                 'k.GetProcessAffinityMask(ctypes.c_void_p(k.GetCurrentProcess()),ctypes.byref(a),ctypes.byref(b));'
+                 'print(a.value)')
+        kernel32 = ctypes.windll.kernel32
+        kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+        before, system = ctypes.c_size_t(), ctypes.c_size_t()
+        kernel32.GetProcessAffinityMask(ctypes.c_void_p(kernel32.GetCurrentProcess()),
+                                        ctypes.byref(before), ctypes.byref(system))
+        mask = system.value & -system.value  # the lowest logical processor
+        with batch_runs.inherited_affinity(mask):
+            child = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, check=True)
+        self.assertEqual(int(child.stdout), mask)
+        after = ctypes.c_size_t()
+        kernel32.GetProcessAffinityMask(ctypes.c_void_p(kernel32.GetCurrentProcess()),
+                                        ctypes.byref(after), ctypes.byref(system))
+        self.assertEqual(after.value, before.value)
+        with self.assertRaises(ValueError):
+            with batch_runs.inherited_affinity(1 << 63):
+                pass
+
+
 class RegressionReportTest(unittest.TestCase):
     def test_compute_reuse_preserves_content_identity_and_permutation_indices(self):
         result = regression_report.parse_log(

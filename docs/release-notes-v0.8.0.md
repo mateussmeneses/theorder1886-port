@@ -44,7 +44,11 @@ reporter's retest.
 
 ## Validation And Known Limits
 
-- VALIDATION_PLACEHOLDER
+- Windows CLANG64 build passed. All 56 C/C++ suites passed (including the
+  task-idle differential test against the original eboot code). Python ran 348
+  tests with 41 skips and no failures.
+- The packaged build reached the in-engine prologue with default settings
+  (idle replacement installed, 60 FPS, process CPU 7-10%).
 - The idle-worker gain was measured on a 24-thread CPU. Whether it reduces
   stutter on CPUs with fewer cores is not measured yet.
 - An intermittent GPU-library failure (`std::bad_alloc` at the prologue load)

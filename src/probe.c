@@ -279,6 +279,7 @@ static DWORD WINAPI win_watchdog_thread(LPVOID param) {
     DWORD sec = (DWORD)(uintptr_t)param;
     Sleep(sec * 1000);
     runtime_memory_report(); /* the direct memory still in use: long runs show a leak */
+    if (isa_table) isa_rewrite_report(isa_table,stdout); /* what the ISA emulation ran */
     fflush(stdout);
     fprintf(stderr, "\nSTOP: watchdog timeout after %u seconds; thread stacks:\n", (unsigned)sec);
     /* As the Linux watchdog: a run that stopped presenting shows where every thread waits. */

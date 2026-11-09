@@ -38,6 +38,12 @@ enum { ANDN_AT = 0x0e0 };
 /* S6: vcvtph2ps xmm1, xmm1 ; ret  -> F16C site, int3, emulated on the trapped CONTEXT (Windows) */
 static const uint8_t S6_CODE[] = {0xc4, 0xe2, 0x79, 0x13, 0xc9, 0xc3};
 enum { S6 = 0x200 };
+/* S7: movbe eax, [rdi+0] ; ret   S8: movbe rax, [rdi+8] ; ret   S9: movbe r9d, [rdi] ; mov eax, r9d ; ret
+ * -> MOVBE loads emitted inline (mov + bswap) instead of the emulator call */
+static const uint8_t S7_CODE[] = {0x0f, 0x38, 0xf0, 0x47, 0x00, 0xc3};
+static const uint8_t S8_CODE[] = {0x48, 0x0f, 0x38, 0xf0, 0x47, 0x08, 0xc3};
+static const uint8_t S9_CODE[] = {0x44, 0x0f, 0x38, 0xf0, 0x0f, 0x44, 0x89, 0xc8, 0xc3};
+enum { S7 = 0x240, S8 = 0x260, S9 = 0x280 };
 
 static unsigned char *region, *image, *stubs;
 static unsigned char pristine[PAGE];
@@ -323,6 +329,46 @@ static void test_vector_int3_via_handler(void) {
 #endif
 }
 
+static IsaSite movbe_load_at(uint64_t offset, uint8_t length, uint8_t width, uint8_t dst, int64_t disp) {
+    IsaSite s = site_at(offset, length, ISA_MOVBE_LOAD, ISA_MODE_JMP, dst, ISA_NO_REG);
+    s.width = width;
+    s.mem_slot = ISA_MEM_SRC;
+    s.base = 7;   /* rdi */
+    s.scale = 1;
+    s.disp = disp;
+    return s;
+}
+
+static uint64_t call_keeping_cf(void *fn, const void *arg, unsigned char *cf) {
+    uint64_t result;
+    __asm__ volatile("stc\n\tleaq -128(%%rsp), %%rsp\n\tcall *%[fn]\n\tleaq 128(%%rsp), %%rsp\n\tsetc %[cf]"
+                     : "=a"(result), [cf] "=r"(*cf)
+                     : [fn] "r"(fn), "D"(arg)
+                     : "rsi", "rcx", "rdx", "r8", "r9", "r10", "r11", "memory", "cc");
+    return result;
+}
+
+static void test_inline_movbe_load(void) {
+    reset_region();
+    IsaSite sites[3] = {movbe_load_at(S7, 5, 32, 0, 0), movbe_load_at(S8, 6, 64, 0, 8), movbe_load_at(S9, 5, 32, 9, 0)};
+    IsaTable *t = table_of(sites, 3);
+    IsaReport r = isa_rewrite_apply(t, image, stubs, CPU_SET_MOVBE);
+    assert(r.rewritten == 3 && r.jmp == 3 && r.skipped == 0);
+    for (int i = 0; i < 3; i++) {   /* no emulator call in these stubs: mov rax, isa_emulate is absent */
+        const uint64_t target = (uint64_t)(uintptr_t)isa_emulate;
+        for (int at = 0; at + 10 <= ISA_STUB_BYTES; at++)
+            assert(!(stubs[i * ISA_STUB_BYTES + at] == 0x48 && stubs[i * ISA_STUB_BYTES + at + 1] == 0xb8 &&
+                     memcmp(stubs + i * ISA_STUB_BYTES + at + 2, &target, 8) == 0));
+    }
+    const uint64_t data[2] = {0x0102030405060708ull, 0x1122334455667788ull};
+    unsigned char cf = 0;
+    assert(call_keeping_cf(image + S7, data, &cf) == 0x08070605ull && cf == 1);
+    assert(call_keeping_cf(image + S8, data, &cf) == 0x8877665544332211ull && cf == 1);
+    assert(call_keeping_cf(image + S9, data, &cf) == 0x08070605ull && cf == 1);
+    assert(call_keeping_cf(image + S7, data, &cf) == 0x08070605ull);
+    assert(t->hits[0] == 2 && t->hits[1] == 1 && t->hits[2] == 1);
+}
+
 static void test_int3_site_via_handler(void) {
     reset_region();
     IsaTable *t = snippet_table();
@@ -380,7 +426,8 @@ static void test_report_top_sites(void) {
     size_t n = fread(text, 1, sizeof text - 1, f);
     text[n] = 0;
     fclose(f);
-    assert(strcmp(text, "ISA: most executed sites:\n  0x30 lzcnt 7\n  0x10 blsr 5\n  0x40 bextr 1\n") == 0);
+    assert(strcmp(text, "ISA: most executed sites:\n  0x30 lzcnt 7\n  0x10 blsr 5\n  0x40 bextr 1\n"
+                        "ISA: hits by instruction: lzcnt 7, bextr 1, blsr 5\n") == 0);
 }
 
 /* The instruction after a JMP_RELOCATE site changed (a patch or hook): the site falls back to int3,
@@ -488,6 +535,9 @@ int main(int argc, char **argv) {
     memcpy(pristine + S5, S5_CODE, sizeof S5_CODE);
     memcpy(pristine + ANDN_AT, ANDN_CODE, sizeof ANDN_CODE);
     memcpy(pristine + S6, S6_CODE, sizeof S6_CODE);
+    memcpy(pristine + S7, S7_CODE, sizeof S7_CODE);
+    memcpy(pristine + S8, S8_CODE, sizeof S8_CODE);
+    memcpy(pristine + S9, S9_CODE, sizeof S9_CODE);
     test_jmp_site();
     test_relocated_site();
     test_adjacent_sites();
@@ -500,6 +550,7 @@ int main(int argc, char **argv) {
     test_table_load_fixture(argv[1]);
     test_int3_site_via_handler();
     test_vector_int3_via_handler();
+    test_inline_movbe_load();
     test_trap_unknown_address();
     test_site_of_stub();
     test_report_top_sites();

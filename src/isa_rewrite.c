@@ -186,6 +186,32 @@ static int rel32_to(const unsigned char *next, const unsigned char *target, int3
     return 1;
 }
 
+/* MOVBE r32/r64, [mem] (not RIP-relative, no 66 prefix) runs inline: the same prefixes, REX, ModRM,
+ * SIB and displacement with opcode 0F 38 F0 replaced by MOV's 8B, then BSWAP of the destination.
+ * Neither touches flags, and both write the 32-bit register zero-extended, as MOVBE does. The
+ * hottest site in The Order runs ~900 000 times a second; the emulator call costs ~70 instructions.
+ * Returns the bytes written, 0 when the site is not of that form. */
+static size_t emit_inline_movbe_load(unsigned char *p, const IsaSite *s) {
+    if (s->kind != ISA_MOVBE_LOAD || (s->width != 32 && s->width != 64) || s->mem_slot != ISA_MEM_SRC ||
+        (s->mem_flags & ISA_MEM_RIP_RELATIVE) || s->dst > 15)
+        return 0;
+    size_t op = 0;
+    while (op + 2 < s->length && !(s->original[op] == 0x0f && s->original[op + 1] == 0x38 && s->original[op + 2] == 0xf0)) {
+        const uint8_t b = s->original[op];
+        if (!(b >= 0x40 && b <= 0x4f)) return 0;   /* only a REX prefix may precede the opcode */
+        op++;
+    }
+    if (op + 3 >= s->length) return 0;
+    unsigned char *start = p;
+    emit_bytes(&p, s->original, op);                                 /* REX */
+    emit_u8(&p, 0x8b);                                              /* mov r, r/m */
+    emit_bytes(&p, s->original + op + 3, s->length - op - 3);       /* ModRM, SIB, displacement */
+    const uint8_t rex = (uint8_t)((s->width == 64 ? 0x48 : 0) | (s->dst >= 8 ? 0x41 : 0));
+    if (rex) emit_u8(&p, rex);
+    emit_bytes(&p, (const uint8_t[]){0x0f, (uint8_t)(0xc8 + (s->dst & 7))}, 2);   /* bswap r */
+    return (size_t)(p - start);
+}
+
 /* Writes the stub for `s` into `code` (laid out to run at `at`). Returns its size, or 0 when the
  * jmp back is out of rel32 range. */
 static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaSite *s, uint64_t *hit,
@@ -194,6 +220,29 @@ static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaS
     static const uint8_t lea_rax_rsp_up[] = {0x48, 0x8d, 0x84, 0x24, 0x00, 0x01, 0x00, 0x00}; /* lea rax,[rsp+0x100] */
     static const uint8_t lea_rsp_up[] = {0x48, 0x8d, 0xa4, 0x24, 0x00, 0x01, 0x00, 0x00};     /* lea rsp,[rsp+0x100] */
     unsigned char *p = code;
+    unsigned char inline_code[32];
+    const size_t inline_size = emit_inline_movbe_load(inline_code, s);
+    if (inline_size) {
+        /* hits[i]++ without touching flags, below the guest's red zone */
+        emit_bytes(&p, lea_rsp_down, sizeof lea_rsp_down);
+        emit_bytes(&p, (const uint8_t[]){0x50, 0x51, 0x48, 0xb9}, 4);              /* push rax; push rcx; mov rcx, &hits[i] */
+        emit_u64(&p, (uint64_t)(uintptr_t)hit);
+        emit_bytes(&p, (const uint8_t[]){0x48, 0x8b, 0x01,                         /* mov rax, [rcx] */
+                                         0x48, 0x8d, 0x40, 0x01,                   /* lea rax, [rax+1] */
+                                         0x48, 0x89, 0x01, 0x59, 0x58}, 12);       /* mov [rcx], rax; pop rcx; pop rax */
+        emit_bytes(&p, lea_rsp_up, sizeof lea_rsp_up);
+        emit_bytes(&p, inline_code, inline_size);
+        const unsigned char *back = image + s->offset + s->length;
+        if (s->mode == ISA_MODE_JMP_RELOCATE) {
+            emit_bytes(&p, s->relocated, s->relocated_length);
+            back = image + s->offset + 4 + s->relocated_length;
+        }
+        int32_t rel;
+        if (!rel32_to(at + (p - code) + JMP_BYTES, back, &rel)) return 0;
+        emit_u8(&p, 0xe9);
+        emit_u32(&p, (uint32_t)rel);
+        return (size_t)(p - code);
+    }
     emit_bytes(&p, lea_rsp_down, sizeof lea_rsp_down);
     for (int reg = 0; reg < 16; reg++)
         if (reg != 4) emit_mov_store(&p, reg, (uint8_t)(8 * reg));
@@ -386,9 +435,24 @@ void isa_rewrite_report(const IsaTable *t, FILE *out) {
             if (t->hits[i] == 0 || (prev >= 0 && !ranks_before(t, (uint32_t)prev, i))) continue;
             if (best < 0 || ranks_before(t, i, (uint32_t)best)) best = i;
         }
-        if (best < 0) return;
+        if (best < 0) break;
         fprintf(out, "  0x%llx %s %llu\n", (unsigned long long)t->sites[best].offset,
                 isa_kind_name(t->sites[best].kind), (unsigned long long)t->hits[best]);
         prev = best;
     }
+    /* Totals by instruction (both MOVBE kinds as one): what the emulation costs, and whether the
+     * F16C sites ran at all. */
+    uint64_t totals[ISA_VCVTPS2PH + 1] = {0};
+    for (uint32_t i = 0; i < t->count; i++) {
+        const uint8_t kind = t->sites[i].kind == ISA_MOVBE_STORE ? ISA_MOVBE_LOAD : t->sites[i].kind;
+        if (kind <= ISA_VCVTPS2PH) totals[kind] += t->hits[i];
+    }
+    int first = 1;
+    for (int kind = ISA_MOVBE_LOAD; kind <= ISA_VCVTPS2PH; kind++) {
+        if (!totals[kind]) continue;
+        fprintf(out, "%s%s %llu", first ? "ISA: hits by instruction: " : ", ", isa_kind_name((uint8_t)kind),
+                (unsigned long long)totals[kind]);
+        first = 0;
+    }
+    if (!first) fputc('\n', out);
 }

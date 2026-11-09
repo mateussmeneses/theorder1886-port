@@ -2,6 +2,34 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-09: `THEORDER_TASK_IDLE` under restricted CPU affinity (measurement only)
+
+- **Method:** `tools/batch_runs.py --affinity MASK` (new, opt-in; the game's process tree inherits
+  the mask, the runner keeps its own; recorded as `cpu_affinity` in the manifest). Masks from the
+  real topology (8 P-cores with SMT at logical 0-15, 8 E-cores at 16-23): 8P `0x5555`, 4P
+  `0x5500`, 2P `0x5000`, plus no mask. 42 runs of base/idle2 (and 2 of idle1), prologue route,
+  v0.8.0 build without the checkout's uncommitted changes. Details: docs/PERFORMANCE_BASELINE.md.
+- **Measured:** mode 2 cuts process CPU in every set with spare capacity (5.2 -> 1.9 cores full,
+  4.9 -> 1.6 at 8P, 3.9 of 4 -> 1.3 at 4P). At 4P it removes most missed vblanks (P99 ~38 ms ->
+  18 ms in 3 of 5 runs). At 2P both saturate the two processors, but mode 2 doubles FPS (25.6 vs
+  12.0) and removes multi-second stalls: with four spinning workers the shader compile threads
+  starve (43.8 s of compile waits per 45 s window). P95 is 0.15-0.25 ms lower elsewhere.
+- **Decision:** mode 2 stays the default; backoff parameters unchanged (no evidence to tune).
+  Affinity on this CPU is not an older CPU: no claim about #65; #40 (9950X3D) not reproduced.
+- **Not settled: stability under restricted affinity.** Failures in base 4/19, idle2 7/17 (Fisher
+  p = 0.28). Both kinds are GPU-library defects, now the next items:
+  1. `PipelineCache::WaitGraphics` keeps a `pending_graphics` iterator across `PublishShaders()`,
+     which can insert through `DrainDeferredSelections()` (pre-queueing, `54a41ab`), then erases
+     through the stale iterator: crash at `theorder-probe.exe+0x126ce4` (2 runs, idle2).
+     Proposed fix (not done here): look the key up again after the wait.
+  2. `liverpool.h:208 std::bad_alloc`: CPU-side memory grows in ~18 GB steps at the load into the
+     prologue (up to 78 GB private, Vulkan allocations flat); hits base, idle1 and idle2 and can
+     exhaust the system commit limit (other processes crashed).
+  3. Main-thread write-fault readbacks (`BufferCache::InvalidateMemory -> ReadMemory` from
+     `Rasterizer::OnWriteFault`; eboot stores at 0xcc8791 in `sub_cc85a0`, `vmovss`; ~32% of main
+     thread samples): a separate GPU investigation of page ownership and coherence. No change to
+     synchronization or write tracking in this task.
+
 ## 2026-11-08: REA investigation, native task idle callback (default on in v0.8.0)
 
 - **Finding:** on CPUs with MOVBE/F16C/BMI1/LZCNT no ISA site is rewritten; the eboot runs natively.

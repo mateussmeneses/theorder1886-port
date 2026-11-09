@@ -1,5 +1,102 @@
 # Performance baseline
 
+## 2026-11-09: `THEORDER_TASK_IDLE` under restricted CPU affinity
+
+**Question:** does mode 2 (default since v0.8.0) still help, or hurt, when the game gets fewer
+logical processors? Affinity on this CPU measures contention between the port's own threads; it
+does not reproduce an older or smaller CPU (clocks, caches, ISA), so nothing here says such CPUs
+are supported (#65), and it does not reproduce #40 (Ryzen 9 9950X3D, CPU at 100% after ~30 min).
+
+**Setup.** Windows 11 10.0.26300; i7-14650HX; RTX 5060 Laptop, NVIDIA 621.14.0.0, Vulkan 1.4.357;
+CUSA00035 01.02 (eboot SHA-256 `f742eb17...58d8`). Build: master `19b998b` (v0.8.0) plus the
+runner change below, in a separate worktree (the checkout's uncommitted `runtime_file.c` change
+stops the game before the title); `theorder-probe.exe` SHA-256 `64e08804...0a92`.
+Route: `--pad "24:cross:0.5 28:cross:0.5 32:cross:0.5 36:cross:0.5 40:cross:0.5 50:cross:0.5
+60:cross:0.5"` (prologue opening), 125 s runs, `--frame-trace`, warm port cache copied per run,
+`THEORDER_FRAME_STATS=1 THEORDER_PERF_LOG=1`; conditions interleaved run by run.
+
+**Topology** (`GetLogicalProcessorInformationEx`): 8 P-cores (EfficiencyClass 1, SMT, logical
+processors 2k and 2k+1, 0-15) and 8 E-cores (class 0, 16-23). One logical processor per P-core,
+avoiding core 0 (system interrupts) in the small sets:
+
+| Set | Logical processors | Mask |
+|---|---|---|
+| full | 0-23 | none |
+| 8P | 0,2,4,6,8,10,12,14 | `0x5555` |
+| 4P | 8,10,12,14 | `0x5500` |
+| 2P | 12,14 | `0x5000` |
+
+**Method.** `tools/batch_runs.py --affinity MASK` (new, opt-in) gives the mask to the runner only
+while it starts `run.py`; `run.py` and `theorder-probe.exe` inherit it and the runner gets its own
+mask back (checked live: runner `0xffffff`, `run.py` and the game `0x5000`). The runtime records
+guest thread affinity without applying it, so every game thread is bound by the process mask. The
+manifest records `cpu_affinity`.
+
+**Window:** the last 45 s of presented frames (the prologue, reached at ~70 s in every completed
+run); CPU over the same window (`Process metrics`, % of all 24 logical processors; cores = % x 24).
+Completed runs only; failures below.
+
+| Set | Condition | Runs ok/all | Process CPU | Cores used | Of available | FPS | P50 | P95 | P99 | P99.9 | Frames > 33 / 50 / 100 / 200 ms |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| full | base | 3/3 | 21.63% | 5.19 | 22% | 56.3 | 16.66 | 17.78 | 18.42 | 227.8 | 18.3 / 17.3 / 17.3 / 8.7 |
+| full | idle2 | 3/3 | 7.87% | 1.89 | 8% | 57.3 | 16.66 | 17.53 | 17.98 | 201.7 | 16.0 / 15.0 / 14.7 / 5.0 |
+| 8P | base | 3/3 | 20.57% | 4.94 | 62% | 57.1 | 16.66 | 17.73 | 18.30 | 224.5 | 15.0 / 13.7 / 13.3 / 7.3 |
+| 8P | idle2 | 2/3 | 6.64% | 1.59 | 20% | 57.2 | 16.65 | 17.57 | 18.18 | 193.7 | 16.0 / 15.5 / 15.0 / 6.0 |
+| 4P | base | 7/10 | 16.42% | 3.94 | 99% | 56.8 | 16.61 | 17.86 | 37.94 | 242.2 | 40.7 / 14.9 / 13.1 / 6.0 |
+| 4P | idle1 | 1/2 | 16.57% | 3.98 | 99% | 57.5 | 16.64 | 17.88 | 37.05 | 239.3 | 36 / 10 / 9 / 6 |
+| 4P | idle2 | 5/8 | 5.41% | 1.30 | 32% | 57.0 | 16.64 | 17.62 | 25.51 | 263.3 | 28.6 / 12.2 / 11.8 / 6.2 |
+| 2P | base | 5/6 | 8.09% | 1.94 | 97% | 12.0 | 24.25 | 653.5 | 3787.6 | 13397.6 | 294 / 61 / 23 / 13.8 |
+| 2P | idle2 | 3/6 | 7.82% | 1.88 | 94% | 25.6 | 36.06 | 83.2 | 171.2 | 520.1 | 710 / 218 / 49 / 8.7 |
+
+Per-run spread (completed runs): full P95 base 17.73-17.82 vs idle2 17.52-17.53, P99.9 226-230 vs
+201-202; 8P P95 17.70-17.77 vs 17.54-17.60; 4P P99 base 36.96-39.82 in all 7 runs, idle2 17.99,
+18.13, 18.16, 31.91, 41.36; 2P FPS base 1.3-28.1 vs idle2 25.0-26.1, worst frame base 2.0-56.1 s
+vs idle2 0.65-0.82 s.
+
+**Where the slow frames go** (frames over 33 ms, per run; wait columns of `frames.csv`, which
+overlap): pipeline-compile waits dominate in full/8P/4P in both conditions (2.0-3.3 s of
+`compile_wait` per run). In 2P base they reach 43.8 s of compile wait and 256 s of driver time
+summed over threads: the shader compile threads starve while four workers spin on two
+processors. In 2P idle2 host-copy waits dominate (18 s); compile waits are 3.6 s.
+
+**Failures** (restricted sets; the runner's status, cause read from each log):
+
+| Condition | Runs | `bad_alloc` in the GPU library | Fault in `PipelineCache::WaitGraphics` | Presentation stopped (watchdog) |
+|---|---|---|---|---|
+| base | 19 | 3 | 0 | 1 |
+| idle1 | 2 | 1 | 0 | 0 |
+| idle2 | 17 | 5 | 2 | 0 |
+
+No failure in the full set (6 runs). Fisher exact, two-sided: any failure idle2 7/17 vs base 4/19
+p = 0.28; `bad_alloc` p = 0.43; `WaitGraphics` fault p = 0.22: not significant. Both failure kinds
+are GPU-library defects that the idle mode does not cause:
+- `bad_alloc` (`liverpool.h:208`) hits base, idle1 and idle2. CPU-side memory jumps by ~18 GB
+  steps at the load into the prologue (private 5 -> 23 -> 41 -> 78 GB; Vulkan allocations stay at
+  ~2.1 GB). On this host (commit limit 51.6 GB) it also starved other processes: the runner's
+  Python interpreter crashed twice after such a run.
+- The `WaitGraphics` fault is an iterator invalidation: `WaitGraphics` keeps a `pending_graphics`
+  (`tsl::robin_map`) iterator across `PublishShaders()`, which can call `DrainDeferredSelections()`
+  and `pending_graphics.emplace`, then calls `pending_graphics.erase(it)` (pre-queueing,
+  `54a41ab`, on by default through `THEORDER_PREQUEUE_SUBMISSION_PIPELINES`). Seen only with
+  idle2 here (2 of 17); timing decides whether a publish lands inside the wait.
+
+**Conclusions.**
+- Mode 2 lowers process CPU wherever there is spare capacity: 5.2 -> 1.9 cores (full),
+  4.9 -> 1.6 (8P), and from a saturated 3.9 of 4 to 1.3 (4P). In 2P the game saturates both
+  processors either way, but with mode 2 they run the game: 25.6 against 12.0 FPS (base 1.3-28),
+  P99 171 ms against 274-15,414 ms.
+- Frame time: P95 lower by 0.15-0.25 ms in full/8P/4P (non-overlapping in full and 8P); at 4P the
+  base misses about one vblank in sixty (P99 37-40 ms in all 7 runs, 40.7 frames over 33 ms per
+  45 s on average) and mode 2 mostly does not (P99 18 ms in 3 of 5 runs, 28.6 frames over 33 ms). Worst frames remain pipeline compiles.
+- Job latency was not measured directly; P50 and FPS do not regress in any set, and mode 1
+  (same polling as the guest) behaves like base.
+- Keep mode 2 as the default; no evidence to change its spin count or sleep. Stability under
+  restricted affinity is not established in either direction: fix the `WaitGraphics` iterator and
+  find the `bad_alloc` growth, then repeat a larger stability sample (e.g. 20 + 20 runs at 4P).
+
+Data (not versioned): `out/affinity-bench/` (manifests `manifest-*.json`, logs, `frames.csv`,
+`combined.json`, `analyze.py`, `combine.py`, `topology.json`).
+
 ## 2026-11-08: job-worker idle backoff (`THEORDER_TASK_IDLE`)
 
 Host as below (i7-14650HX, RTX 5060 Laptop, NVIDIA 621.1.0.0). Build HEAD 7a52434 plus the change,

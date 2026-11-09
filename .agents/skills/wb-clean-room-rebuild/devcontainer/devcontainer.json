@@ -1,0 +1,13 @@
+{
+  "name": "clean-room",
+  "build": { "dockerfile": "Dockerfile" },
+  "runArgs": ["--name", "rea-clean", "--cap-add=NET_ADMIN", "--cap-add=NET_RAW"],
+  "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
+  "workspaceFolder": "/work",
+  "remoteUser": "node",
+  "containerEnv": {
+    "CLEAN_ROOM": "1",
+    "ALLOWED_DOMAINS": "api.anthropic.com statsig.anthropic.com sentry.io"
+  },
+  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh"
+}

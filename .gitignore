@@ -29,3 +29,6 @@ patches.json
 graphify-out/
 .claude/
 .vscode/
+
+# AI Workbench private local context
+.ai-workbench/

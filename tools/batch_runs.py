@@ -262,12 +262,32 @@ def _scheduled_repeated_trigger(path, first_seconds, count, spacing, started, st
                 return
 
 
+def failure_cause(log: str) -> str:
+    """What stopped a run besides a native fault, read from its log ('' when nothing did): an
+    unhandled C++ exception (std::bad_alloc was labelled HUNG or EXIT 23 before) or a STOP line.
+    The watchdog STOP that ends every timed run is not a cause; a run that really hangs stays HUNG."""
+    exception = re.search(r'^Unhandled exception: (.+?)\s*$', log, re.M)
+    if exception:
+        return f'EXCEPTION {exception.group(1)}'
+    for stop in re.finditer(r'^STOP: (.+?)\s*$', log, re.M):
+        if not stop.group(1).startswith('watchdog timeout'):
+            return f'STOP {stop.group(1)[:80]}'
+    return ''
+
+
+def run_state(r: dict, timed_out: bool, returncode) -> str:
+    return (f'FAULT {r["fault"]}' if r['fault'] else r['cause'] if r['cause'] else
+            'TIMEOUT' if timed_out else 'HUNG' if r['hung'] else
+            f'EXIT {returncode}' if returncode else 'ok')
+
+
 def summarize(log: str, secs: int):
     metrics = parse_log(log, secs)
     fault = re.search(r'^Fault: .*? at (\S+)', log, re.M)
     return {
         'flip': metrics['flip'],
         'fault': fault.group(1) if fault else metrics['fault'],
+        'cause': failure_cause(log),
         'hung': metrics['hung'],
         'compile_s': metrics['compile_s'],
         'windows': metrics['windows'],
@@ -555,9 +575,7 @@ def main():
             if game_identity['status'] == 'mismatch':
                 print(f'WARNING: expected game identity mismatch: {game_identity}', flush=True)
             results[label].append(r)
-            state = (f'FAULT {r["fault"]}' if r['fault'] else
-                     'TIMEOUT' if timed_out else 'HUNG' if r['hung'] else
-                     f'EXIT {process.returncode}' if process.returncode else 'ok')
+            state = run_state(r, timed_out, process.returncode)
             print(f'{label:>10} {i + 1:2}: flip {r["flip"]:5} compile {r["compile_s"]:5.1f}s {state}',
                   flush=True)
             visual = None
@@ -589,7 +607,8 @@ def main():
                 'data_dir': _stored_path(run_data_dir),
                 'started_utc': datetime.fromtimestamp(time.time() - elapsed, timezone.utc).isoformat(),
                 'elapsed_seconds': round(elapsed, 3), 'exit_code': process.returncode,
-                'timed_out': timed_out, 'log_path': _stored_path(log_path),
+                'timed_out': timed_out, 'run_state': state, 'failure_cause': r['cause'] or None,
+                'log_path': _stored_path(log_path),
                 'capture_dir': _stored_path(capture_dir), 'settings': {
                     'environment': _safe_settings(env),
                     'config': _read_ini(env.get('THEORDER_CONFIG', '')),
@@ -607,10 +626,12 @@ def main():
             manifest['runs'].append(record)
     print('summary:')
     for label, rs in results.items():
-        failed = sum(1 for r in rs if r['fault'] or r['hung'])
+        failed = sum(1 for r in rs if r['fault'] or r['cause'] or r['hung'])
         flips = sorted(r['flip'] for r in rs)
         print(f'  {label:>10}: {failed}/{len(rs)} failed '
-              f'({sum(1 for r in rs if r["fault"])} faults, {sum(1 for r in rs if r["hung"])} hung), '
+              f'({sum(1 for r in rs if r["fault"])} faults, '
+              f'{sum(1 for r in rs if r["cause"] and not r["fault"])} exceptions/stops, '
+              f'{sum(1 for r in rs if r["hung"] and not r["fault"] and not r["cause"])} hung), '
               f'median flip {flips[len(flips) // 2]}, '
               f'mean compile {sum(r["compile_s"] for r in rs) / len(rs):.1f}s')
     manifest_path.parent.mkdir(parents=True, exist_ok=True)

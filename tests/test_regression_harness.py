@@ -24,6 +24,38 @@ fault_stacks = load_tool('fault_stacks')
 batch_runs = load_tool('batch_runs')
 
 
+class BatchFailureCauseTest(unittest.TestCase):
+    """Runs that died of std::bad_alloc were labelled HUNG or EXIT 23 (2026-11-09 affinity batches)."""
+    WATCHDOG = 'STOP: watchdog timeout after 125 seconds; thread stacks:\n'
+
+    def test_watchdog_end_of_a_timed_run_is_not_a_cause(self):
+        self.assertEqual(batch_runs.failure_cause('Frame stats: 60 FPS\n' + self.WATCHDOG), '')
+
+    def test_unhandled_exception_is_named(self):
+        log = ('GPU [Debug] <Critical> liverpool.h:208 unhandled_exception: Unreachable code!\n'
+               'Unhandled exception: std::bad_alloc\r\n'
+               'STOP: GPU library assertion failed (see GPU log above)\n' + self.WATCHDOG)
+        self.assertEqual(batch_runs.failure_cause(log), 'EXCEPTION std::bad_alloc')
+
+    def test_other_stop_lines_are_named(self):
+        log = 'STOP: this CPU lacks AVX\n'
+        self.assertEqual(batch_runs.failure_cause(log), 'STOP this CPU lacks AVX')
+
+    def test_state_order(self):
+        base = {'fault': None, 'cause': '', 'hung': False}
+        self.assertEqual(batch_runs.run_state(base, False, 0), 'ok')
+        self.assertEqual(batch_runs.run_state({**base, 'hung': True}, False, 23), 'HUNG')
+        self.assertEqual(batch_runs.run_state({**base, 'hung': True, 'cause': 'EXCEPTION std::bad_alloc'},
+                                              False, 23), 'EXCEPTION std::bad_alloc')
+        self.assertEqual(batch_runs.run_state({**base, 'fault': 'x.exe+0x10', 'cause': 'STOP y'}, False, 1),
+                         'FAULT x.exe+0x10')
+        self.assertEqual(batch_runs.run_state(base, False, 23), 'EXIT 23')
+
+    def test_summary_carries_the_cause(self):
+        r = batch_runs.summarize('Unhandled exception: std::bad_alloc\n', 125)
+        self.assertEqual(r['cause'], 'EXCEPTION std::bad_alloc')
+
+
 class BatchAffinityTest(unittest.TestCase):
     def test_affinity_masks_parse_and_reject_empty_or_invalid(self):
         self.assertEqual(batch_runs.parse_affinity('0x5500'), 0x5500)

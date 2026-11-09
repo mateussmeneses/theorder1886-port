@@ -85,10 +85,38 @@ def get_git_info(repo_dir):
         pass
     return "Release build (git metadata absent)"
 
-def generate_report(app_config, ini_config, log_text, repo_dir, game_title="The Order: 1886"):
+LOG_TAIL_BYTES = 4 << 20
+
+
+def collect_log(view_text, log_file):
+    """The log for a report and where it came from. The game's last_run.log is preferred: the
+    launcher's log view is empty after the launcher is reopened (or after Clear), while the file
+    keeps the last run. Large files contribute their last LOG_TAIL_BYTES."""
+    try:
+        path = Path(log_file)
+        size = path.stat().st_size
+        if size:
+            with open(path, 'rb') as f:
+                if size > LOG_TAIL_BYTES:
+                    f.seek(size - LOG_TAIL_BYTES)
+                text = f.read().decode('utf-8', errors='replace')
+            if size > LOG_TAIL_BYTES:
+                text = text.split('\n', 1)[-1]  # drop the partial first line
+            return text, f"{path.name} (game output file)"
+    except (OSError, TypeError):
+        pass
+    if view_text and view_text.strip():
+        return view_text, "launcher log view"
+    return "", "none (no last_run.log and an empty launcher log view)"
+
+
+def generate_report(app_config, ini_config, log_text, repo_dir, game_title="The Order: 1886",
+                    version=None, log_source=None):
     """Generates Markdown diagnostic summary."""
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     git_rev = get_git_info(repo_dir)
+    if version:
+        git_rev = f"{version} ({git_rev})"
     cpu_str = get_cpu_info()
     ram_str = get_ram_info()
     os_str = f"{platform.system()} {platform.release()} ({platform.version()}, {platform.architecture()[0]})"
@@ -126,6 +154,8 @@ def generate_report(app_config, ini_config, log_text, repo_dir, game_title="The 
 - **Save Data / Dumps Included:** None (User privacy preserved).
 
 ## Log Excerpt (Recent execution)
+Source: {log_source or "launcher log view"}
+
 ```text
 {redacted_log[-4000:] if redacted_log else "No log output available."}
 ```

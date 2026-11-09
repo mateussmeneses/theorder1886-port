@@ -1832,7 +1832,8 @@ class Launcher:
             import port_report
             from datetime import datetime
             from tkinter import filedialog
-            log_text = self.log.get('1.0', 'end-1c') if hasattr(self, 'log') else ''
+            view_text = self.log.get('1.0', 'end-1c') if hasattr(self, 'log') else ''
+            log_text, log_source = port_report.collect_log(view_text, run_log_path(self.app))
             ini_cfg = {}
             for k in ('display_mode', 'upscaler', 'output_res', 'fps_limit', 'vsync', 'hdr'):
                 try:
@@ -1845,7 +1846,8 @@ class Launcher:
                     app_cfg[k] = self.var(k, 'app').get()
                 except Exception:
                     pass
-            report_md, redacted_log = port_report.generate_report(app_cfg, ini_cfg, log_text, PORT_DIR, APP_NAME)
+            report_md, redacted_log = port_report.generate_report(
+                app_cfg, ini_cfg, log_text, PORT_DIR, APP_NAME, version=VERSION, log_source=log_source)
             default_name = f"theorder1886-report-{datetime.now():%Y%m%d-%H%M}.zip"
             zip_path = filedialog.asksaveasfilename(
                 title=_("Save Diagnostic Bug Report", "Сохранить отчет"),

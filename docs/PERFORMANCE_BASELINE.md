@@ -1,5 +1,23 @@
 # Performance baseline
 
+## 2026-11-08: job-worker idle backoff (`THEORDER_TASK_IDLE`)
+
+Host as below (i7-14650HX, RTX 5060 Laptop, NVIDIA 621.1.0.0). Build HEAD 7a52434 plus the change,
+in a separate worktree. Prologue opening reached with `--pad "24:cross:0.5 28:cross:0.5
+32:cross:0.5 36:cross:0.5 40:cross:0.5 50:cross:0.5 60:cross:0.5"`, 125 s runs, warm port cache
+copied per run (`--cache-state warm --user-template user`; ~500 driver compiles per run).
+Last 45 s of presented frames; process CPU from `THEORDER_PERF_LOG` over the same window.
+
+| Condition | Runs | Process CPU | P50 ms | P95 ms | P99 ms | Worst ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| base | 6 | 22.07% | 16.65 | 17.75 | 18.43 | 255-456 |
+| `THEORDER_TASK_IDLE=1` (native, same policy) | 4 | 21.46% | 16.65 | 17.73 | 18.37 | 253-450 |
+| `THEORDER_TASK_IDLE=2` (backoff) | 4 | 6.97% | 16.66 | 17.55 | 18.12 | 212-387 |
+
+Mode 2 saves ~15 points of CPU (about 3.6 of 24 logical CPUs) and 0.2 ms of P95 in every run; worst
+frames (pipeline compiles) do not change. One base run ended in the pre-existing
+`liverpool.h:208 std::bad_alloc`. Details and limits: docs/REA_NATIVE_ABSTRACTION.md.
+
 ## 2026-11-01: Controlled Cold, Warm, and Revisit A/B Benchmarks
 
 Host: Windows 11 (10.0.26300), Intel Family 6 Model 183, NVIDIA GeForce RTX 5060 Laptop GPU,

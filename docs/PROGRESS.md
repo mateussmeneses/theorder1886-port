@@ -2,6 +2,25 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-08: REA investigation, native task idle callback (default on in v0.8.0)
+
+- **Finding:** on CPUs with MOVBE/F16C/BMI1/LZCNT no ISA site is rewritten; the eboot runs natively.
+  In the prologue the four "Task Kernel" job workers spend 97% of their time polling empty queues
+  (`sub_20a950`, yield every 1,800 polls in `sub_8a7380`, never sleeping), and the main thread
+  spends 32% blocked in write-fault readbacks (`BufferCache::InvalidateMemory`, eboot stores at
+  0xcc8791; GPU side, unchanged). Profiles with `THEORDER_SAMPLE=guest:` (now named guest threads,
+  guest frame-pointer unwinding, no self-suspension) and `tools/guest_symbols.py`.
+- **Change:** `THEORDER_TASK_IDLE=1|2` replaces `sub_8a7380` (byte-checked for 01.02) with a
+  System V native callback; 2 sleeps 200 us per idle period after 8 consecutive idle yields.
+  Mode 2 is the default from v0.8.0 (user decision after the measurements); `THEORDER_TASK_IDLE=0`
+  keeps the guest code. `task-idle-test` runs the original machine code against mode 1
+  (20,000 inputs, identical).
+- **Measured** (one host, 24 logical CPUs): mode 2 process CPU 22.1% -> 7.0%, P95 17.75 -> 17.55 ms,
+  worst frames unchanged; mode 1 equals base. Not measured: CPUs with fewer cores.
+- **Also seen:** the uncommitted `runtime_file.c` localization-stub fallback stops the game at a
+  black "Encountered an error" screen before the 3D title; a pre-existing `std::bad_alloc` in the
+  GPU library at the prologue load (1 of 14 base runs). docs/REA_NATIVE_ABSTRACTION.md.
+
 ## 2026-11-01: graphics fidelity, temporal stability, and VRAM management (6 PR branches)
 
 - **Scope:** comprehensive investigation and remediation of graphics fidelity regressions, flickering,

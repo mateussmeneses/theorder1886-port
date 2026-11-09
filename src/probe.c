@@ -8,6 +8,7 @@
 #include "runtime.h"
 #include "cpu_check.h"
 #include "isa_rewrite.h"
+#include "task_idle.h"
 #include "gpu/theordergpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -311,9 +312,14 @@ static DWORD WINAPI win_watchdog_thread(LPVOID param) {
  * (60) and for THEORDER_SAMPLE_SECS (30), every millisecond the matching threads are suspended and
  * their eight innermost frames counted; THEORDER_SAMPLE_OUT (out/sample.txt) then gets
  * "count;thread=<name>;frame;..." lines (tools/sample_report.py names them). Nothing is allocated
- * or printed while a thread is suspended: it may hold the heap lock. */
+ * or printed while a thread is suspended: it may hold the heap lock. The sampler never samples
+ * itself ("*" used to suspend its own thread and hang). Guest frames have no unwind tables: past a
+ * guest frame the walk follows the eboot's frame-pointer chain (rbp -> [saved rbp, return]), read
+ * with ReadProcessMemory so a stale rbp ends the walk instead of faulting; a guest leaf without
+ * a frame of its own makes the walk skip its direct caller. */
 #define SAMPLE_SLOTS 65536
 #define SAMPLE_DEPTH 8
+#define SAMPLE_THREADS 256
 typedef struct { uintptr_t frames[SAMPLE_DEPTH]; unsigned thread, count; } SampleSlot;
 static SampleSlot sample_slots[SAMPLE_SLOTS];
 static int sample_add(unsigned thread, const uintptr_t frames[SAMPLE_DEPTH]) {
@@ -326,19 +332,32 @@ static int sample_add(unsigned thread, const uintptr_t frames[SAMPLE_DEPTH]) {
     }
     return 0; /* table full */
 }
+/* One frame-pointer step out of guest code: 0 when c->Rip is not guest code or the chain ends. */
+static int sample_guest_frame(CONTEXT *c) {
+    if (!image || c->Rip-(uintptr_t)image>=0x20000000 || !c->Rbp || c->Rbp&7 || c->Rbp<c->Rsp) return 0;
+    DWORD64 link[2]; /* saved rbp, return address */
+    SIZE_T got=0;
+    if (!ReadProcessMemory(GetCurrentProcess(),(LPCVOID)(uintptr_t)c->Rbp,link,sizeof(link),&got) ||
+        got!=sizeof(link) || link[0]<=c->Rbp)
+        return 0;
+    c->Rsp=c->Rbp+16; c->Rip=link[1]; c->Rbp=link[0];
+    return 1;
+}
 static DWORD WINAPI win_sampler_thread(LPVOID param) {
     const char *part=(const char *)param, *start=getenv("THEORDER_SAMPLE_START"),
                *secs=getenv("THEORDER_SAMPLE_SECS"), *out=getenv("THEORDER_SAMPLE_OUT");
     Sleep((start ? (DWORD)atoi(start) : 60)*1000);
-    wchar_t wpart[256], names[64][64];
+    static wchar_t wpart[256], names[SAMPLE_THREADS][64];
     MultiByteToWideChar(CP_UTF8,0,part,-1,wpart,256);
-    HANDLE threads[64];
+    static HANDLE threads[SAMPLE_THREADS];
     int count=0;
     HANDLE snapshot=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD,0);
     THREADENTRY32 entry={.dwSize=sizeof(entry)};
     if (snapshot!=INVALID_HANDLE_VALUE && Thread32First(snapshot,&entry)) {
         do {
-            if (entry.th32OwnerProcessID!=GetCurrentProcessId() || count==64) continue;
+            if (entry.th32OwnerProcessID!=GetCurrentProcessId() || entry.th32ThreadID==GetCurrentThreadId() ||
+                count==SAMPLE_THREADS)
+                continue;
             HANDLE thread=OpenThread(THREAD_SUSPEND_RESUME|THREAD_GET_CONTEXT|THREAD_QUERY_LIMITED_INFORMATION,
                                      FALSE,entry.th32ThreadID);
             if (!thread) continue;
@@ -371,6 +390,7 @@ static DWORD WINAPI win_sampler_thread(LPVOID param) {
                     DWORD64 base=0; PVOID handler_data; DWORD64 establisher;
                     PRUNTIME_FUNCTION fn=RtlLookupFunctionEntry(c.Rip,&base,NULL);
                     if (fn) RtlVirtualUnwind(UNW_FLAG_NHANDLER,base,c.Rip,fn,&c,&handler_data,&establisher,NULL);
+                    else if (sample_guest_frame(&c)) continue;
                     else if (depth==0) { c.Rip=*(DWORD64 *)c.Rsp; c.Rsp+=8; }
                     else break;
                 }
@@ -649,6 +669,26 @@ void runtime_restart(void) {
 #endif
 }
 
+/* THEORDER_TASK_IDLE (src/task_idle.h): native idle callback of the job workers. Its stub is
+ * the last bytes of the stub area; the diagnostic hooks below fill that area from its start. */
+#define TASK_IDLE_STUB_SPACE 64
+static void task_idle_sleep(uint64_t ns) {
+#ifdef _WIN32
+    compat_sleep_ns(ns);
+#else
+    struct timespec t={(time_t)(ns/1000000000u),(long)(ns%1000000000u)};
+    while (nanosleep(&t,&t) && errno==EINTR) {}
+#endif
+}
+static void install_task_idle(unsigned char *stub, uint64_t image_size) {
+    TaskIdleConfig idle=task_idle_config_from_env();
+    if (!idle.mode) return;
+    TaskIdleHooks hooks={runtime_thread_self,runtime_thread_yield,task_idle_sleep};
+    const char *why=task_idle_install(image,image_size,&task_idle_eboot_0102,stub,TASK_IDLE_STUB_SPACE,&idle,&hooks);
+    if (why) printf("Task idle: mode %d not installed: %s\n",idle.mode,why);
+    else printf("Task idle: mode %d installed at 0x%" PRIx64 " (spin yields %u, sleep %" PRIu64 " us)\n",idle.mode,
+                task_idle_eboot_0102.offset,idle.spin_yields,idle.sleep_ns/1000);
+}
 static unsigned char *g_diag_stubs;
 static size_t g_diag_stub_offset;
 
@@ -1319,6 +1359,7 @@ int main(int argc, char **argv) {
                     missing, r.rewritten, r.jmp, r.relocated, r.int3, r.skipped);
         runtime_set_report_hook(isa_report_hook);
     }
+    install_task_idle(stubs + stub_area - TASK_IDLE_STUB_SPACE, size);
     protect(stubs, stub_area, 5);
     protect(traps, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);

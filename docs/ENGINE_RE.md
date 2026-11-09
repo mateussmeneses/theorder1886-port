@@ -111,6 +111,18 @@ dependency counter pointer, `+0x38` a completion counter decremented after the j
 - Analytic in-scattering of light volumes (Sun et al.): PS 15c552f8, a2925aa8, 64b3f066, fd7df5bc
   into a 960x400 R16G16B16A16 buffer, F table in a 512x512 R32 texture.
 
+## Job workers' idle loop (`sub_20ad20`, `sub_8a7380`)
+
+The four "Task Kernel" workers run `sub_20ad20`: while the scheduler runs (`+0x18`) or jobs are
+pending (`queue+0xc0`), `sub_20a950` pops one job; after each empty pop a stack counter goes up by
+one (it is zeroed when a job ran) and the callback at `scheduler+0x1d0` gets its address. That
+callback is `sub_8a7380`, the seventh argument the scheduler constructor `sub_20b860` gets from
+`sub_8a10a0` (0x8a1c78): above 0x708 empty polls, unless the calling thread is the one at
+`[0x1682de8]`, it calls `scePthreadYield` and zeroes the counter. There is no sleep, so idle
+workers spin at 100% of a core each (97% of their samples in the prologue, of which 81.6% in
+`sub_20a950`). `sub_20a950`'s `sceKernelUsleep(1000000)` calls only retry a failed re-push.
+`THEORDER_TASK_IDLE` replaces the callback natively: docs/REA_NATIVE_ABSTRACTION.md.
+
 ## Per-thread TLS and Mersenne Twister (`sub_89fa60`, `sub_8a0330`, `0xc00ed7`)
 
 - `sub_8a10a0` (`0x8a1863..0x8a1884`) installs `sub_89fa60` at `[0x170d438]` (thread-start hook,

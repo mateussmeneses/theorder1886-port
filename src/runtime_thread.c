@@ -127,6 +127,7 @@ GuestThread *runtime_thread_current(void) {
 }
 /* Host threads that call guest code (HLE decoders invoking guest callbacks) need
  * a TCB/TLS like guest threads; the record lives until process exit. */
+static void describe_host_thread(const char *name);
 void runtime_thread_attach_host(const char *name) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "host");
@@ -134,6 +135,7 @@ void runtime_thread_attach_host(const char *name) {
 void runtime_thread_attach_main(void) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"main");
+    describe_host_thread(t->name);
 }
 static GuestThread *find_thread(void *handle) {
     GuestThread *found=NULL;
@@ -152,6 +154,7 @@ static ThreadAttr *find_attr(ThreadAttr **slot) {
 }
 
 static ABI void *thread_self(void) { return runtime_thread_current(); }
+void *runtime_thread_self(void) { return runtime_thread_current(); }
 static ABI int32_t *guest_error(void) { return &guest_errno; }
 int32_t *runtime_errno(void) { return &guest_errno; }
 
@@ -239,11 +242,23 @@ static ABI int32_t attr_set_guard(ThreadAttr **slot,uint64_t size) {
     a->guard=size; return 0;
 }
 
-/* Linux thread names hold 15 characters; longer ones would be rejected. */
+/* Linux thread names hold 15 characters; longer ones would be rejected. On Windows the
+ * winpthreads name is invisible to GetThreadDescription, which the sampler and watchdog
+ * (probe.c) read: guest threads get "guest:<name>" there. */
+static void describe_host_thread(const char *name) {
+#ifdef _WIN32
+    wchar_t wide[72]=L"guest:";
+    MultiByteToWideChar(CP_UTF8,0,name,(int)strnlen(name,64),wide+6,64);
+    SetThreadDescription(GetCurrentThread(),wide);
+#else
+    (void)name;
+#endif
+}
 static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
     pthread_setname_np(pthread_self(),host);
+    describe_host_thread(name);
 }
 #ifdef _WIN32
 #define exit_setjmp(t) port_setjmp((t)->exit_jump)
@@ -334,6 +349,7 @@ static ABI int32_t thread_yield(void) {
 #else
 static ABI int32_t thread_yield(void) { sched_yield(); return 0; }
 #endif
+void runtime_thread_yield(void) { thread_yield(); }
 static ABI int32_t thread_get_prio(GuestThread *t,int *prio) {
     if (!find_thread(t)) return ERR(3);
     if (!prio) return ERR(22);

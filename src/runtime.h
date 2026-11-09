@@ -107,4 +107,8 @@ void runtime_savedata_report(void);
 int runtime_savedata_param(int32_t user, const char *dir, void *param);
 int runtime_savedata_icon(int32_t user, const char *dir, char *out, size_t size);
 void runtime_thread_attach_host(const char *name);
+/* scePthreadSelf / scePthreadYield for native replacements of guest code (task_idle.h). */
+void *runtime_thread_self(void);
+void runtime_thread_yield(void);
+void runtime_task_idle_report(void);
 #endif

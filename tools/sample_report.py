@@ -4,7 +4,9 @@ usage: python tools/sample_report.py [out/sample.txt] [--exe out/theorder-probe.
 
 Each sample line is "count;frame0;frame1;..." with frames as "module+0xoffset" or "guest offset
 0x...". Frames in the port's executable are named with llvm-symbolizer (MSYS2 CLANG64) from its
-DWARF; other modules count as one entry each, and guest code as "guest".
+DWARF; other modules count as one entry each. Guest frames are named by the function start at or
+below them when --guest-symbols (default out/guest_symbols.json, from tools/guest_symbols.py)
+exists: sub_<A> for the eboot, libc:<name> / libSceFios2:<name> for linked modules; else "guest".
 """
 import argparse
 import collections
@@ -64,8 +66,19 @@ def symbolize(frames, exe):
     return names
 
 
-def module_name(frame):
-    return 'guest' if frame.startswith('guest offset') else frame.split('+0x')[0]
+GUEST = 'guest offset 0x'
+
+
+def guest_offset(frame):
+    return int(frame[len(GUEST):].split()[0], 16) if frame.startswith(GUEST) else None
+
+
+def module_name(frame, resolve=None):
+    offset = guest_offset(frame)
+    if offset is None:
+        return frame.split('+0x')[0]
+    name = resolve(offset) if resolve else None
+    return 'guest' if not name else 'guest:' + (name.split(':')[0] if ':' in name else 'eboot')
 
 
 def main():
@@ -73,14 +86,23 @@ def main():
     parser.add_argument('samples', nargs='?', type=Path, default=ROOT / 'out/sample.txt')
     parser.add_argument('--exe', type=Path, default=ROOT / 'out/theorder-probe.exe')
     parser.add_argument('--top', type=int, default=30)
+    parser.add_argument('--guest-symbols', type=Path, default=ROOT / 'out/guest_symbols.json')
     args = parser.parse_args()
+    resolve = None
+    if args.guest_symbols.exists():
+        from guest_symbols import load_resolver
+        resolve = load_resolver(args.guest_symbols)
+
+    def guest_name(frame):
+        offset = guest_offset(frame)
+        return resolve(offset) if resolve and offset is not None else None
     threads = parse(args.samples.read_text(encoding='utf-8', errors='replace').splitlines())
     names = symbolize({f for samples in threads.values() for _, frames in samples for f in frames},
                       args.exe)
     for thread, samples in sorted(threads.items()):
         total = sum(count for count, _ in samples)
-        own, inclusive = aggregate(samples, lambda f: names.get(f) or module_name(f))
-        modules, _ = aggregate(samples, module_name)
+        own, inclusive = aggregate(samples, lambda f: names.get(f) or guest_name(f) or module_name(f))
+        modules, _ = aggregate(samples, lambda f: module_name(f, resolve))
         print(f'=== {thread}: {total} samples')
         for title, counter in (('modules (innermost frame)', modules), ('self', own),
                                ('inclusive (sampled frames)', inclusive)):

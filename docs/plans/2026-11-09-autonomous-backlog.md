@@ -213,3 +213,17 @@ por esse resultado.
 síncrono. Medido (2 × 125 s): 90 % dos downloads têm o escritor no command buffer ainda aberto
 (99-100 % no gameplay). Hipótese 1 refutada como alavanca principal; R2 não implementado. Detalhes em
 `docs/GPU_READBACK_INVESTIGATION.md`.
+
+### C2 continuação — MOVBE inline (`fd773d3`, `7a6c70e`)
+
+Relatório de hits por instrução no fim de cada execução: ~286 M chamadas ao emulador em 125 s,
+um único `movbe eax,[r12]` com 114 M; os 5 F16C rodaram 30 k vezes (caminho int3/XMM exercitado).
+Loads MOVBE agora são inline (MOV + BSWAP). A/B intercalado 3+3+3: P99 de volta ao nativo
+(18,0-18,3 ms), ainda ~25 % mais stutters/min nos caminhos reescritos. Próximo candidato: BEXTR.
+
+### S4, C1 — não executados
+
+- S4 (commit da seção de memória guest): trocar `SEC_COMMIT` por reserva + commit sob demanda
+  mexe no mapeamento da memória guest inteira; sem A/B seguro nesta sessão. Fica a proposta.
+- C1 (#40): a medição de 2026-11-09 já mostra o efeito do idle padrão do v0.8.0 (5,2 → 1,9
+  núcleos); vira pedido de reteste (rascunho no arquivo de respostas).

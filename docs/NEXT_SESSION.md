@@ -47,5 +47,12 @@ tick instead of `Finish()` (measure tick gap first).
 
 ## Next exact actions
 
-Follow `docs/plans/2026-11-09-autonomous-backlog.md` from the first item not marked done in its
-"Diário" section.
+Branch `auto/backlog-20261109` (worktree `../theorder1886-port-wg`) holds this session's commits;
+`master` was not fast-forwarded because the main checkout's uncommitted `src/probe.c` (subtitle
+WIP) overlaps files these commits change. Review, then merge or cherry-pick.
+
+1. Decide on publishing: reply drafts in `docs/ISSUE_REPLY_DRAFTS_2026-11-09.md` (nothing posted).
+2. #65: ask a 2nd/3rd generation Intel user to test a build of this branch.
+3. Open items with a next step written down: boot faults S1/S2 (plan), BEXTR inline
+   (`docs/OLD_CPU_ISA_PATH.md`), material-permutation reduction (`docs/PIPELINE_SESSION_REBUILDS.md`),
+   #101 mash QTE (diary).

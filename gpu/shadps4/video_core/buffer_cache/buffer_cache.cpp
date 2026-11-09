@@ -526,6 +526,13 @@ void BufferCache::QueueReadbacks() {
     }
 }
 
+namespace {
+bool ReadbackTickLog() {
+    static const bool enabled = std::getenv("THEORDER_READBACK_TICK_LOG") != nullptr;
+    return enabled;
+}
+} // namespace
+
 void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size, bool is_write,
                                  bool async) {
     boost::container::small_vector<vk::BufferCopy, 1> copies;
@@ -582,6 +589,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         });
     });
     runtime.CopyBuffer(arena, download.buffer, copies);
+    boost::container::small_vector<std::pair<VAddr, u64>, 4> copies_for_log;
+    if (!async && ReadbackTickLog()) {
+        for (const auto& copy : copies) {
+            copies_for_log.emplace_back(arena_base + copy.srcOffset, copy.size);
+        }
+    }
 
     const auto write_data = [this, arena_base, device_addr, size, download, is_write, async,
                              copies = std::move(copies)] {
@@ -604,8 +617,64 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     if (async) {
         scheduler.DeferOperation(std::move(write_data));
     } else {
+        if (ReadbackTickLog()) {
+            boost::container::small_vector<VAddr, 4> starts;
+            boost::container::small_vector<u64, 4> sizes;
+            for (const auto& copy : copies_for_log) {
+                starts.push_back(copy.first);
+                sizes.push_back(copy.second);
+            }
+            NoteSyncDownload(starts.data(), sizes.data(), starts.size());
+        }
         scheduler.Finish();
         write_data();
+    }
+}
+
+void BufferCache::NoteSyncDownload(const VAddr* begin, const u64* sizes, size_t count) {
+    // Classify the newest GPU write in the downloaded ranges: still in the command buffer being
+    // recorded (Finish is the only way to get it), in one already submitted (a wait on that tick
+    // would do), or complete (only the copy itself needs to run).
+    const u64 current = scheduler.CurrentTick();
+    u64 writer = 0;
+    bool known = false;
+    std::scoped_lock lock{gpu_ranges_mutex}; // also guards readback_ticks
+    for (size_t i = 0; i < count; ++i) {
+        for (VAddr page = begin[i] >> 12; page <= (begin[i] + sizes[i] - 1) >> 12; ++page) {
+            if (const auto it = write_ticks.find(page); it != write_ticks.end()) {
+                writer = std::max(writer, it->second);
+                known = true;
+            }
+        }
+    }
+    auto& st = readback_ticks;
+    if (!known) {
+        ++st.unknown;
+    } else if (writer >= current) {
+        ++st.open;
+    } else if (scheduler.IsFree(writer)) {
+        ++st.complete;
+        st.tick_gap_sum += current - writer;
+    } else {
+        ++st.submitted;
+        st.tick_gap_sum += current - writer;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (st.window.time_since_epoch().count() == 0) {
+        st.window = now;
+    }
+    if (now - st.window >= std::chrono::seconds(5)) {
+        const u64 older = st.submitted + st.complete;
+        std::printf("Readback ticks: %llu sync downloads; newest GPU write in the open command "
+                    "buffer %llu, submitted and running %llu, complete %llu, unknown %llu; mean "
+                    "gap %.1f ticks\n",
+                    static_cast<unsigned long long>(st.open + older + st.unknown),
+                    static_cast<unsigned long long>(st.open),
+                    static_cast<unsigned long long>(st.submitted),
+                    static_cast<unsigned long long>(st.complete),
+                    static_cast<unsigned long long>(st.unknown),
+                    older ? double(st.tick_gap_sum) / double(older) : 0.0);
+        st = ReadbackTickStats{.window = now};
     }
 }
 
@@ -848,6 +917,12 @@ void BufferCache::MarkRegionAsGpuModified(VAddr addr, size_t size) {
 void BufferCache::NoteGpuWrite(VAddr address, u64 size) {
     std::scoped_lock lock{gpu_ranges_mutex};
     gpu_modified_ranges.Add(address, size);
+    if (ReadbackTickLog() && size) {
+        const u64 tick = scheduler.CurrentTick();
+        for (VAddr page = address >> 12; page <= (address + size - 1) >> 12; ++page) {
+            write_ticks[page] = tick;
+        }
+    }
     // Copies recorded before this write no longer bring the newest bytes.
     for (auto it = settle_tokens.begin(); it != settle_tokens.end();) {
         const bool overlaps = it->first < address + size && address < it->first + it->second.first;

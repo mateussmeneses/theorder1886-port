@@ -6,6 +6,7 @@
 #include "port_copy.h"
 
 #include <deque>
+#include <chrono>
 #include <map>
 #include <tuple>
 #include <mutex>
@@ -240,6 +241,17 @@ private:
     /// downloads on the GPU thread, read by guest write faults (TouchesGpuBytes).
     RangeSet gpu_modified_ranges;
     std::mutex gpu_ranges_mutex;
+    /// port: THEORDER_READBACK_TICK_LOG=1 (diagnostic): the scheduler tick that recorded the last
+    /// GPU write of each 4 KiB page (under gpu_ranges_mutex), and how old that writer is when a
+    /// synchronous download drains the GPU (docs/GPU_READBACK_INVESTIGATION.md, hypothesis 1);
+    /// readback_ticks is under the same mutex.
+    std::unordered_map<VAddr, u64> write_ticks;
+    struct ReadbackTickStats {
+        u64 open = 0, submitted = 0, complete = 0, unknown = 0;
+        u64 tick_gap_sum = 0;
+        std::chrono::steady_clock::time_point window{};
+    } readback_ticks;
+    void NoteSyncDownload(const VAddr* begin, const u64* sizes, size_t count);
     /// port: whether [device_addr, device_addr + size) holds bytes a GPU binding wrote.
     bool TouchesGpuBytes(VAddr device_addr, u64 size);
 

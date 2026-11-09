@@ -739,9 +739,10 @@ struct CompileTimer {
 
 // port: THEORDER_PERMUTATION_LOG names the specialization field that forced a new permutation.
 std::string DescribeSpecDifference(const Shader::StageSpecialization& a,
-                                   const Shader::StageSpecialization& b) {
+                                   const Shader::StageSpecialization& b, size_t* count = nullptr) {
     std::string out;
-    const auto add = [&out](std::string what) {
+    const auto add = [&out, count](std::string what) {
+        if (count) ++*count;
         out += out.empty() ? "" : ", ";
         out += std::move(what);
     };
@@ -800,13 +801,34 @@ std::string DescribeSpecDifference(const Shader::StageSpecialization& a,
     return out.empty() ? "no field difference found" : out;
 }
 
+/// Compares with the existing permutation that differs in the fewest fields (restored ones
+/// included), so the log names what kept a known specialization from matching.
+template <class Modules>
 void LogNewPermutation(u64 hash, size_t perm_idx, const Shader::StageSpecialization& spec,
-                       const Shader::StageSpecialization& closest) {
+                       const Modules& modules) {
     static const bool enabled = std::getenv("THEORDER_PERMUTATION_LOG") != nullptr;
-    if (enabled) {
-        LOG_WARNING(Render_Vulkan, "port: shader {:#x} permutation {}: {}", hash, perm_idx,
-                    DescribeSpecDifference(spec, closest));
+    if (!enabled) {
+        return;
     }
+    size_t best = modules.size(), best_count = ~size_t{0};
+    std::string best_text;
+    for (size_t i = 0; i < modules.size(); ++i) {
+        if (!modules[i].spec.Valid()) {
+            continue;
+        }
+        size_t count = 0;
+        auto text = DescribeSpecDifference(spec, modules[i].spec, &count);
+        if (count < best_count) {
+            best = i;
+            best_count = count;
+            best_text = std::move(text);
+        }
+    }
+    if (best == modules.size()) {
+        return;
+    }
+    LOG_WARNING(Render_Vulkan, "port: shader {:#x} permutation {}: closest {} ({} fields): {}",
+                hash, perm_idx, best, best_count, best_text);
 }
 } // namespace
 
@@ -2440,9 +2462,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
         }
         if (compile_async || async_compute_perm) {
             if (!program->modules.empty()) {
-                LogNewPermutation(params.hash, perm_idx, spec,
-                                  program->modules[std::min(program->last_used,
-                                                            program->modules.size() - 1)].spec);
+                LogNewPermutation(params.hash, perm_idx, spec, program->modules);
             }
             if (async_compute_perm) {
                 pending_compute_fallback_pgm = params.hash;
@@ -2464,9 +2484,7 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             return {};
         }
         if (!program->modules.empty()) {
-            LogNewPermutation(params.hash, perm_idx, spec,
-                              program->modules[std::min(program->last_used,
-                                                        program->modules.size() - 1)].spec);
+            LogNewPermutation(params.hash, perm_idx, spec, program->modules);
         }
         auto new_info = Shader::Info(hw_stage, sw_stage, params);
         u64 spv_hash{};

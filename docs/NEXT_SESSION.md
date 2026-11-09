@@ -4,15 +4,18 @@ Living state of the post-v0.8.0 continuation (WaitGraphics, `bad_alloc`, readbac
 stability). Updated after each milestone; the full account is
 `docs/AUTONOMOUS_CONTINUATION_REPORT.md`.
 
-## State (2026-11-09)
+## State (2026-11-09, evening)
 
-- `master` = `origin/master` = `19b998b` (v0.8.0). Nothing committed, pushed or tagged.
+- `master` (local) carries the WaitGraphics fix `922a4bb`, `batch_runs --affinity` `6f8788f`,
+  these documents `f1e6935` and AI Workbench files; autonomous work continues on branch
+  `auto/backlog-20261109` in the clean worktree `../theorder1886-port-wg`, following
+  `docs/plans/2026-11-09-autonomous-backlog.md` (progress in its "Diário" section).
 - User WIP, untouched and never to be committed: `src/runtime_file.c`, `src/runtime_kernel.c`,
   subtitle traces in `src/probe.c`, submodule `gpu/third_party/fsr-vulkan`. The WIP
-  `runtime_file.c` fallback shows a black screen ("Encountered an error"): measure from a clean
+  `runtime_file.c` fallback shows a black screen ("Encountered an error"): measure from the clean
   worktree, never from the main checkout.
-- Clean measurement worktree: `../theorder1886-port-wg` (detached `19b998b` + the changes below,
-  copied in). Remove it with `git worktree remove` when done; it is not user data.
+- The 4P retest is done (`docs/AFFINITY_STABILITY_RETEST.md`, 5 batches, 47/50 complete, 0
+  `bad_alloc`, 0 WaitGraphics faults); its two boot faults are open (plan items S1-S3).
 
 ## Milestone 1: WaitGraphics iterator invalidation (done, fix implemented and unit-tested)
 
@@ -44,8 +47,5 @@ tick instead of `Finish()` (measure tick gap first).
 
 ## Next exact actions
 
-1. 4P stability retest 20 + 20 (base vs idle2) with the fixed build: `out/affinity-bench/retest.sh`
-   (batches `r4p1`..`r4p4`, 5 + 5 each, logs in `logs/r4pN`, `retest.log`), `memwatch.ps1` guard
-   (stop it with `out/affinity-bench/memwatch.stop`). Analyze with `analyze.py` (window 45 s).
-2. Then write the results into `docs/PERFORMANCE_BASELINE.md`, `docs/PROGRESS.md`,
-   `docs/AFFINITY_STABILITY_RETEST.md` and `docs/AUTONOMOUS_CONTINUATION_REPORT.md`.
+Follow `docs/plans/2026-11-09-autonomous-backlog.md` from the first item not marked done in its
+"Diário" section.

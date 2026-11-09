@@ -1,8 +1,8 @@
 # Autonomous continuation report: post-v0.8.0 (2026-11-09)
 
 Scope: CPU-affinity benchmark follow-up, `PipelineCache::WaitGraphics`, the `bad_alloc` memory
-growth, main-thread write-fault readbacks, 4P stability retest. Nothing was committed, pushed,
-tagged or released; Git history is untouched.
+growth, main-thread write-fault readbacks, 4P stability retest. Nothing was pushed, tagged or released during the task; the changes were committed afterwards
+(section 14).
 
 ## 1. Initial Git state
 
@@ -134,7 +134,28 @@ document).
 (v0.8.0) → 0/40 (Fisher p = 0.0005); any failure 6/18 → 2/40 (p = 0.008). The v0.8.0 claim that
 idle2 removes most missed vblanks at 4P did not hold on 19 runs (P99 CIs overlap).
 
-CONFIRMATION_BATCH_PLACEHOLDER
+### Confirmation batch `r4p5` (5 + 5, same conditions, 06:52-07:12 local)
+
+base 5/5 complete; idle2 4/5: `r4p5/idle2-02` faulted at flip 1 with the same stack as
+`r4p4/base-05` (`theorder-probe.exe+0x16bc7b`, `Scheduler::Finish` from
+`Fsr4Upscaler::Impl::Destroy`). All five batches together (`retest_combine.py r4p1 … r4p5`):
+
+| | base | idle2 |
+|---|---|---|
+| Complete | 24/25 (Wilson 0.80-0.99) | 23/25 (Wilson 0.75-0.98) |
+| FPS | 56.62 ± 0.50 | 57.14 ± 0.24 |
+| P95 / P99 ms | 18.35 ± 0.67 / 39.03 ± 1.21 | 17.67 ± 0.13 / 35.75 ± 2.37 |
+| P99.9 / worst ms | 275.8 ± 23.8 / 452.7 ± 38.7 | 230.7 ± 9.7 / 349.1 ± 37.5 |
+| Process CPU (cores of 4) | 3.92 | 1.39 |
+| Peak private GiB (max) | 5.76 | 5.75 |
+
+Targeted failure kinds 6/18 (v0.8.0) → 0/50 (Fisher p = 0.0002); any failure 6/18 → 3/50
+(p = 0.008). The FSR 4 teardown fault is no longer a single occurrence: 2 in 50 runs, both at
+flip 1; with the driver fault that is 3 boot faults in the 54 fixed-build runs of all sets against
+0 in the 44 v0.8.0 runs (Fisher p = 0.25, not significant). In the faulting frame the destroyed
+`Impl` had `scheduler` = null (`mov 0x40(%rcx)` with `rcx` = 0 loaded from `Impl+8`), although
+that `Impl` was created in the `TemporalUpscaler` constructor and never used: its memory changed
+before frame 1. Open; next step is a boot-only batch (plan item S3).
 
 ## 11. Tests
 
@@ -145,7 +166,9 @@ CONFIRMATION_BATCH_PLACEHOLDER
 | `tools/run_tests.sh`, clean worktree | 57 native tests + Python suite pass (348 OK, 41 skipped) |
 | Fixed-build game runs | fixdiag 4/4, retest 38/40 (failures above) |
 
-FINAL_SUITE_PLACEHOLDER
+Final tree, with the 3 affinity harness tests, before the commits of section 14: `bash build.sh`
+then `bash tools/run_tests.sh` in the clean worktree: "PASS: all 57 native GPU/CPU tests and Python
+suite"; the rebuilt `theorder-probe.exe` has the same SHA-256 (`970b9d33…`) as the retest build.
 
 ## 12. Modified files (uncommitted)
 
@@ -177,8 +200,13 @@ Not versioned: `out/affinity-bench/` (manifests, logs, frame traces, analysis sc
 
 ## 14. Final working-tree state
 
-FINAL_STATE_PLACEHOLDER
+Committed on 2026-11-09 after this report was written: `922a4bb` (WaitGraphics fix and test),
+`6f8788f` (`batch_runs --affinity`), `f1e6935` (these documents). User WIP stays uncommitted in
+the main checkout (`src/probe.c`, `src/runtime_file.c`, `src/runtime_kernel.c`,
+`gpu/third_party/fsr-vulkan`). Work continues on branch `auto/backlog-20261109` in the clean
+worktree.
 
 ## 15. Exact next task
 
-NEXT_TASK_PLACEHOLDER
+`docs/plans/2026-11-09-autonomous-backlog.md`: boot-fault rate (S3), then the FSR 4 teardown and
+presenter fence faults (S1, S2), then pipeline rebuilds across sessions (P1).

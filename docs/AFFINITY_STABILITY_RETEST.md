@@ -122,6 +122,20 @@ Reading:
   occur in 40 runs with the fix, while the condition that caused them (a rehash of the pending map
   during a wait) occurred in 14 of those runs. Combined with the unit tests and the mutation check,
   the fix is verified for this host and route.
-- Two new, single-occurrence boot faults (FSR 4 context teardown at the first upscaler switch;
-  NVIDIA driver in the presenter's fence wait) remain open, unattributed.
+- Two new boot faults (FSR 4 context teardown at the first upscaler switch, seen again in the
+  confirmation batch; NVIDIA driver in the presenter's fence wait, once) remain open, unattributed.
 - Mode 2 stays the default (lower CPU, equal or better frame time). No claim about #65 or #40.
+
+## Addendum: confirmation batch `r4p5` (5 + 5)
+
+Run right after `r4p4` under the same conditions. base 5/5; idle2 4/5: `r4p5/idle2-02` faulted at
+flip 1 at `theorder-probe.exe+0x16bc7b`, the same stack as `r4p4/base-05` (FSR 4 context teardown
+at the first upscaler switch). Five batches together: base 24/25 (Wilson 0.80-0.99), idle2 23/25
+(0.75-0.98); FPS 56.62 ± 0.50 / 57.14 ± 0.24; P99 39.03 ± 1.21 / 35.75 ± 2.37 ms; P99.9
+275.8 ± 23.8 / 230.7 ± 9.7 ms; worst 452.7 ± 38.7 / 349.1 ± 37.5 ms; no `bad_alloc`, no
+`+0x126ce4` fault; targeted failure kinds 6/18 → 0/50 (Fisher p = 0.0002).
+
+The FSR 4 teardown fault therefore has two occurrences in 50 runs and is not a one-off. Boot
+faults of any kind: 3 in the 54 fixed-build runs of all sets, 0 in the 44 v0.8.0 runs
+(Fisher p = 0.25): not enough to attribute them to the build. Tracked as S1-S3 in
+`docs/plans/2026-11-09-autonomous-backlog.md`.

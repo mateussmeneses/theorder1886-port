@@ -264,7 +264,7 @@ if (WIN32)
     # isa_emulate runs inside guest code: no XMM/YMM. The test runs the real instructions as its oracle.
     add_executable(isa-emulate-test EXCLUDE_FROM_ALL ../tests/test_isa_emulate.c ../src/isa_emulate.c)
     set_source_files_properties(../src/isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
-    set_source_files_properties(../tests/test_isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mbmi;-mlzcnt;-mmovbe")
+    set_source_files_properties(../tests/test_isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mbmi;-mlzcnt;-mmovbe;-mf16c")
     set_target_properties(isa-emulate-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(isa-emulate-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
     target_include_directories(isa-emulate-test PRIVATE .. ../src)

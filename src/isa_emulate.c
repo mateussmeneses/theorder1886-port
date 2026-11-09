@@ -124,3 +124,28 @@ void ABI isa_emulate(const IsaSite *site, IsaRegs *regs) {
     write_dst(site, regs, result);
     set_flags(regs, defined, flags);
 }
+
+/* VCVTPH2PS on general registers: IEEE binary16 to binary32, exact for every input (subnormal
+ * halves become normal singles; MXCSR.DAZ does not apply to the half source), NaNs quieted with
+ * their payload kept, as the instruction does. */
+uint32_t isa_half_to_float(uint16_t half) {
+    const uint32_t sign = (uint32_t)(half & 0x8000u) << 16;
+    uint32_t exponent = (half >> 10) & 0x1fu;
+    uint32_t mantissa = half & 0x3ffu;
+    if (exponent == 0x1f) return sign | 0x7f800000u | (mantissa ? 0x00400000u | (mantissa << 13) : 0);
+    if (exponent == 0) {
+        if (!mantissa) return sign;
+        exponent = 113;                      /* 127 - 15 + 1, lowered while normalizing */
+        while (!(mantissa & 0x400u)) {
+            mantissa <<= 1;
+            --exponent;
+        }
+        return sign | (exponent << 23) | ((mantissa & 0x3ffu) << 13);
+    }
+    return sign | ((exponent + 112) << 23) | (mantissa << 13);
+}
+
+void isa_vcvtph2ps(uint64_t halves, uint64_t out[2]) {
+    out[0] = isa_half_to_float((uint16_t)halves) | (uint64_t)isa_half_to_float((uint16_t)(halves >> 16)) << 32;
+    out[1] = isa_half_to_float((uint16_t)(halves >> 32)) | (uint64_t)isa_half_to_float((uint16_t)(halves >> 48)) << 32;
+}

@@ -4,7 +4,7 @@ scan_segment decodes one executable segment with iced-x86 and classifies each
 site: JMP (5+ bytes, patched with a jump to a stub), JMP_RELOCATE (4 bytes,
 the jump also covers the plain next instruction, copied into the stub), INT3
 (4 bytes, trapped at run time) or UNSUPPORTED (an encoding the stubs do not
-emulate: segment override, LOCK, 32-bit addressing or F16C).
+emulate: segment override, LOCK, 32-bit addressing or F16C other than VCVTPH2PS xmm, xmm).
 
 Usage: isa_rewrite.py out/boot-linked.bin --out out
 Reads the G3PROBE5 image, scans its executable segments and writes
@@ -82,7 +82,13 @@ def site_of(ins, kind, original):
         width = 0
     base = index = NO_REG
     scale = mem_flags = disp = 0
-    unsupported = SET_OF_KIND[kind] == 'F16C' or ins.segment_prefix != Register.NONE or ins.has_lock_prefix
+    # F16C: only VCVTPH2PS xmm, xmm (VEX.128) is emulated, by the int3 handler on the trapped XMM
+    # context (Windows); memory forms, ymm destinations and VCVTPS2PH stay unsupported.
+    f16c_int3 = (kind == KIND_VCVTPH2PS and mem_slot == 0 and ins.op0_kind == OpKind.REGISTER
+                 and Register.XMM0 <= ins.op0_register <= Register.XMM15
+                 and Register.XMM0 <= ins.op1_register <= Register.XMM15)
+    unsupported = ((SET_OF_KIND[kind] == 'F16C' and not f16c_int3)
+                   or ins.segment_prefix != Register.NONE or ins.has_lock_prefix)
     if mem_slot:
         unsupported |= any(r != Register.NONE and RegisterExt.size(r) != 8 for r in (ins.memory_base, ins.memory_index))
         scale = ins.memory_index_scale
@@ -92,7 +98,7 @@ def site_of(ins, kind, original):
             base, index = register_number(ins.memory_base), register_number(ins.memory_index)
             disp = ins.memory_displacement  # iced reports it as u64; the table stores int64
             disp -= (1 << 64) if disp >= 1 << 63 else 0
-    mode = MODE_UNSUPPORTED if unsupported else MODE_JMP if ins.len >= 5 else MODE_INT3
+    mode = MODE_UNSUPPORTED if unsupported else MODE_INT3 if f16c_int3 or ins.len < 5 else MODE_JMP
     return Site(ins.ip, ins.len, kind, width, mode, *regs, mem_slot, base, index, scale, mem_flags, disp, original, b'')
 
 

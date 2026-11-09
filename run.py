@@ -66,11 +66,12 @@ def parse_cpu_features(output):
 
 
 def isa_rewrite_wanted(missing, env):
-    """THEORDER_ISA_REWRITE=1 forces the ISA rewrite table, 0 disables it; otherwise the CPU decides."""
-    policy = get_env(env, 'ISA_REWRITE')
-    if policy in ('0', '1'):
-        return policy == '1'
-    return bool(missing)
+    """THEORDER_ISA_REWRITE=1 or a list of sets (MOVBE,BMI1,LZCNT) forces the ISA rewrite table,
+    0 disables it; otherwise the CPU decides."""
+    policy = (get_env(env, 'ISA_REWRITE') or '').strip()
+    if policy == '0':
+        return False
+    return bool(policy) or bool(missing)
 
 
 def run_script(name, *args, capture=False, check=True):

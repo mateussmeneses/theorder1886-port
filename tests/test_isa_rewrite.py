@@ -58,6 +58,16 @@ class ScanSegmentTests(unittest.TestCase):
             s, = isa_rewrite.scan_segment(code + RET, 0)
             self.assertEqual(s.mode, isa_rewrite.MODE_UNSUPPORTED, why)
         self.assertEqual(isa_rewrite.scan_segment(bytes.fromhex('c4e2791310') + RET, 0)[0].kind, isa_rewrite.KIND_VCVTPH2PS)
+        for code, why in ((bytes.fromhex('c4e27d13c9'), 'vcvtph2ps ymm1, xmm1'),
+                          (bytes.fromhex('c4e3791dc900'), 'vcvtps2ph xmm1, xmm1, 0')):
+            s, = isa_rewrite.scan_segment(code + RET, 0)
+            self.assertEqual(s.mode, isa_rewrite.MODE_UNSUPPORTED, why)
+
+    def test_vcvtph2ps_between_xmm_registers_traps(self):
+        # The five F16C sites of The Order's eboot have this form (vcvtph2ps xmm1, xmm1 ... xmm3, xmm3).
+        for code, dst, src in ((bytes.fromhex('c4e27913c9'), 1, 1), (bytes.fromhex('c4627913ca'), 9, 2)):
+            s, = isa_rewrite.scan_segment(code + RET, 0)
+            self.assertEqual((s.kind, s.mode, s.dst, s.src1), (isa_rewrite.KIND_VCVTPH2PS, isa_rewrite.MODE_INT3, dst, src))
 
     def test_negative_displacement_is_signed(self):
         s, = isa_rewrite.scan_segment(bytes.fromhex('0f38f048f8'), 0)   # movbe ecx, [rax-8]

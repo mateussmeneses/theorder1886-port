@@ -35,6 +35,15 @@ IsaReport isa_rewrite_apply(IsaTable *t, unsigned char *image, unsigned char *st
 /* int3 at `address` (the CC byte): 1 when it is a rewritten INT3 site; regs updated, *next_rip = site + its length (4).
  * 0 otherwise, with regs and *next_rip untouched. */
 int isa_rewrite_trap(IsaTable *t, uintptr_t address, IsaRegs *regs, uintptr_t *next_rip);
+/* An applied int3 site whose instruction works on XMM registers (VCVTPH2PS xmm, xmm) at address,
+ * counted as a hit; NULL otherwise. The caller emulates it on the trapped context (isa_vcvtph2ps)
+ * and resumes at address + site->length. isa_rewrite_trap declines these sites. */
+const IsaSite *isa_rewrite_vector_trap(IsaTable *t, uintptr_t address);
+#ifdef _WIN32
+/* The Windows int3 handler's half: emulates such a site on the trapped CONTEXT (void * keeps
+ * <windows.h> out of this header) and moves its Rip past the instruction; 0 when address is not one. */
+int isa_rewrite_trap_context(IsaTable *t, void *context, uintptr_t address);
+#endif
 /* Site index whose stub holds rip, or -1. */
 int isa_rewrite_site_of_stub(const IsaTable *t, uintptr_t rip);
 /* "ISA: most executed sites:" then up to 10 lines "  0x<offset> <mnemonic> <hits>" (hits > 0 only),

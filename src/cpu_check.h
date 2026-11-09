@@ -15,5 +15,9 @@ enum { CPU_SET_MOVBE = 1u << 0, CPU_SET_BMI1 = 1u << 1, CPU_SET_LZCNT = 1u << 2,
 int cpu_missing_fatal(CpuFeatureWords words, char *out, size_t size);
 /* Rewritable sets the host lacks (MOVBE, F16C, BMI1, LZCNT): CPU_SET_* mask; names in out. */
 unsigned cpu_missing_rewritable(CpuFeatureWords words, char *out, size_t size);
+/* A comma separated list of rewritable set names (THEORDER_ISA_REWRITE=MOVBE,BMI1,LZCNT): sets
+ * *mask to their CPU_SET_* bits and writes their names to out; 0 (mask untouched) for an empty
+ * list or an unknown name. */
+int cpu_parse_rewrite_sets(const char *list, unsigned *mask, char *out, size_t size);
 
 #endif

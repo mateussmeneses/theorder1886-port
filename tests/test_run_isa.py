@@ -70,6 +70,10 @@ class RunIsaTests(unittest.TestCase):
     def test_rewrite_forced(self):
         self.assertTrue(run.isa_rewrite_wanted([], {'THEORDER_ISA_REWRITE': '1'}))
 
+    def test_rewrite_forced_for_a_list_of_sets(self):
+        self.assertTrue(run.isa_rewrite_wanted([], {'THEORDER_ISA_REWRITE': 'MOVBE,BMI1,LZCNT'}))
+        self.assertFalse(run.isa_rewrite_wanted([], {'THEORDER_ISA_REWRITE': ''}))
+
     def test_rewrite_disabled(self):
         self.assertFalse(run.isa_rewrite_wanted(['MOVBE', 'BMI1'], {'THEORDER_ISA_REWRITE': '0'}))
 

@@ -29,6 +29,11 @@ enum { ISA_CF = 1u << 0, ISA_ZF = 1u << 6, ISA_SF = 1u << 7, ISA_OF = 1u << 11 }
 void isa_emulate_set_image(unsigned char *image);
 /* Executes the site's instruction on regs (spec 5.6). */
 void ABI isa_emulate(const IsaSite *site, IsaRegs *regs);
+/* VCVTPH2PS xmm, xmm (F16C, Sandy Bridge lacks it): the four halves in the source's low 64 bits
+ * as four singles in out[0] (low) and out[1]. The int3 handler applies it to the trapped
+ * context's XMM registers; isa_emulate never sees these sites. */
+uint32_t isa_half_to_float(uint16_t half);
+void isa_vcvtph2ps(uint64_t halves, uint64_t out[2]);
 /* Flags the instruction defines (the test compares only these). */
 uint64_t isa_defined_flags(uint8_t kind);
 

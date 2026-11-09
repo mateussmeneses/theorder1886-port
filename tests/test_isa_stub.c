@@ -35,6 +35,9 @@ static const uint8_t S5_CODE[] = {0xf3, 0x0f, 0xbd, 0xc7, 0x90, 0x90, 0x90, 0x90
 /* andn eax, ecx, edx */
 static const uint8_t ANDN_CODE[] = {0xc4, 0xe2, 0x70, 0xf2, 0xc2};
 enum { ANDN_AT = 0x0e0 };
+/* S6: vcvtph2ps xmm1, xmm1 ; ret  -> F16C site, int3, emulated on the trapped CONTEXT (Windows) */
+static const uint8_t S6_CODE[] = {0xc4, 0xe2, 0x79, 0x13, 0xc9, 0xc3};
+enum { S6 = 0x200 };
 
 static unsigned char *region, *image, *stubs;
 static unsigned char pristine[PAGE];
@@ -251,6 +254,8 @@ static LONG WINAPI trap_handler(EXCEPTION_POINTERS *info) {
     CONTEXT *c = info->ContextRecord;
     DWORD64 *gpr[16] = {&c->Rax, &c->Rcx, &c->Rdx, &c->Rbx, &c->Rsp, &c->Rbp, &c->Rsi, &c->Rdi,
                         &c->R8,  &c->R9,  &c->R10, &c->R11, &c->R12, &c->R13, &c->R14, &c->R15};
+    if (isa_rewrite_trap_context(trap_table, c, (uintptr_t)info->ExceptionRecord->ExceptionAddress))
+        return EXCEPTION_CONTINUE_EXECUTION;
     IsaRegs regs;
     for (int i = 0; i < 16; i++) regs.gpr[i] = *gpr[i];
     regs.rflags = c->EFlags;
@@ -291,6 +296,32 @@ static void install_trap_handler(void) {
     assert(sigaction(SIGTRAP, &sa, NULL) == 0);
 }
 #endif
+
+/* F16C on a host that has it, through the int3 path a Sandy Bridge host takes: the trapped context's
+ * xmm1 gets the four singles and ymm1's upper half is zeroed, as the instruction does. */
+static void test_vector_int3_via_handler(void) {
+#ifdef _WIN32
+    reset_region();
+    IsaSite site = site_at(S6, 5, ISA_VCVTPH2PS, ISA_MODE_INT3, 1, 1);
+    site.width = 0;
+    IsaTable *t = table_of(&site, 1);
+    IsaReport r = isa_rewrite_apply(t, image, stubs, CPU_SET_F16C);
+    assert(r.unsupported_needed == 0 && r.int3 == 1 && image[S6] == 0xcc);
+    trap_table = t;
+    /* halves (low first): largest normal, largest subnormal, -1, -inf; the upper lanes are garbage */
+    uint64_t lanes[4] = {0xfc00bc0003ff7bffull, 0x1111111111111111ull, 0x2222222222222222ull, 0x3333333333333333ull};
+    uint64_t result[4] = {0, 0, 0, 0};
+    void *fn = image + S6;
+    __asm__ volatile("vmovdqu (%[in]), %%ymm1\n\tleaq -128(%%rsp), %%rsp\n\tcall *%[fn]\n\t"
+                     "leaq 128(%%rsp), %%rsp\n\tvmovdqu %%ymm1, (%[out])\n\tvzeroupper"
+                     :
+                     : [in] "r"(lanes), [out] "r"(result), [fn] "r"(fn)
+                     : "memory", "xmm1");
+    assert(result[0] == 0x387fc000477fe000ull && result[1] == 0xff800000bf800000ull);
+    assert(result[2] == 0 && result[3] == 0);
+    assert(t->hits[0] == 1);
+#endif
+}
 
 static void test_int3_site_via_handler(void) {
     reset_region();
@@ -374,6 +405,19 @@ static void test_relocated_next_changed(void) {
 }
 
 /* A copy of the fixture, `size` bytes long, with byte `at` set to `value`, must not load. */
+static void expect_loaded(const unsigned char *fixture, long size) {
+    const char *dir = getenv("TMPDIR");
+    if (!dir) dir = getenv("TEMP");
+    if (!dir) dir = "/tmp";
+    char path[512];
+    snprintf(path, sizeof path, "%s/port-isa-stub-test-ok.bin", dir);
+    FILE *f = fopen(path, "wb");
+    assert(f != NULL);
+    assert(fwrite(fixture, 1, (size_t)size, f) == (size_t)size && fclose(f) == 0);
+    assert(isa_table_load(path) != NULL);
+    remove(path);
+}
+
 static void expect_rejected(const unsigned char *fixture, long size, long at, unsigned char value) {
     const char *dir = getenv("TMPDIR");
     if (!dir) dir = getenv("TEMP");
@@ -388,7 +432,7 @@ static void expect_rejected(const unsigned char *fixture, long size, long at, un
     remove(path);
 }
 
-enum { RECORD0 = 64, RECORD1 = 128, R_LENGTH = 8, R_WIDTH = 10, R_MODE = 11, R_DST = 12, R_MEM_SLOT = 15,
+enum { RECORD0 = 64, RECORD1 = 128, R_LENGTH = 8, R_KIND = 9, R_WIDTH = 10, R_MODE = 11, R_DST = 12, R_SRC1 = 13, R_MEM_SLOT = 15,
        R_BASE = 16, R_SCALE = 18 };
 
 /* Last: each rejection prints one "ISA: ..." line on stderr. */
@@ -411,6 +455,15 @@ static void test_table_load_rejects(const char *path) {
     expect_rejected(fixture, size, RECORD0 + R_WIDTH, 8);                  /* width 8 */
     expect_rejected(fixture, size, RECORD1 + R_SCALE, 3);                  /* scale 3 */
     expect_rejected(fixture, size, RECORD0 + R_MODE, ISA_MODE_INT3);       /* 5-byte int3 */
+    /* ... except VCVTPH2PS xmm, xmm, which traps at its full length (the F16C sites are 5 bytes) */
+    unsigned char vector[sizeof fixture];
+    memcpy(vector, fixture, sizeof vector);
+    vector[RECORD0 + R_KIND] = ISA_VCVTPH2PS;
+    vector[RECORD0 + R_MODE] = ISA_MODE_INT3;
+    vector[RECORD0 + R_SRC1] = 2;
+    expect_loaded(vector, size);
+    expect_rejected(vector, size, RECORD0 + R_MEM_SLOT, ISA_MEM_SRC);     /* vcvtph2ps xmm, [mem] */
+    expect_rejected(vector, size, RECORD0 + R_SRC1, ISA_NO_REG);
 }
 
 int main(int argc, char **argv) {
@@ -434,6 +487,7 @@ int main(int argc, char **argv) {
     memcpy(pristine + S4, S4_CODE, sizeof S4_CODE);
     memcpy(pristine + S5, S5_CODE, sizeof S5_CODE);
     memcpy(pristine + ANDN_AT, ANDN_CODE, sizeof ANDN_CODE);
+    memcpy(pristine + S6, S6_CODE, sizeof S6_CODE);
     test_jmp_site();
     test_relocated_site();
     test_adjacent_sites();
@@ -445,6 +499,7 @@ int main(int argc, char **argv) {
     test_largest_stub_fits();
     test_table_load_fixture(argv[1]);
     test_int3_site_via_handler();
+    test_vector_int3_via_handler();
     test_trap_unknown_address();
     test_site_of_stub();
     test_report_top_sites();

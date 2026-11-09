@@ -29,6 +29,18 @@ int main(void) {
     /* A short buffer is cut, never overrun; the count stays complete. */
     memset(out, 'x', sizeof out);
     assert(cpu_missing_fatal((CpuFeatureWords){0, 0, 0}, out, 8) == 3 && strlen(out) < 8);
+    /* THEORDER_ISA_REWRITE lists: an older CPU's path on this one. */
+    unsigned mask = 0xdead;
+    assert(cpu_parse_rewrite_sets("MOVBE,BMI1,LZCNT", &mask, out, sizeof out)
+           && mask == (CPU_SET_MOVBE | CPU_SET_BMI1 | CPU_SET_LZCNT) && !strcmp(out, "MOVBE, BMI1, LZCNT"));
+    assert(cpu_parse_rewrite_sets(" lzcnt , f16c,", &mask, out, sizeof out)
+           && mask == (CPU_SET_LZCNT | CPU_SET_F16C) && !strcmp(out, "F16C, LZCNT"));
+    assert(cpu_parse_rewrite_sets("MOVBE+BMI1+LZCNT", &mask, out, sizeof out)
+           && mask == (CPU_SET_MOVBE | CPU_SET_BMI1 | CPU_SET_LZCNT));
+    mask = 0xdead;
+    assert(!cpu_parse_rewrite_sets("MOVBE,AVX2", &mask, out, sizeof out) && mask == 0xdead);
+    assert(!cpu_parse_rewrite_sets("BMI", &mask, out, sizeof out) && mask == 0xdead);
+    assert(!cpu_parse_rewrite_sets(" , ", &mask, out, sizeof out) && mask == 0xdead);
     /* The words come from CPUID: the machine running this test is newer than 2013. */
     assert(cpu_missing_fatal(cpu_feature_words(), out, sizeof out) == 0 && cpu_missing_rewritable(cpu_feature_words(), out, sizeof out) == 0);
     puts("cpu-check-test ok");

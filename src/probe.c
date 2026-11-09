@@ -218,6 +218,9 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record=info->ExceptionRecord;
     DWORD code=record->ExceptionCode;
     if (code==EXCEPTION_BREAKPOINT && isa_table) {
+        /* F16C sites work on XMM registers, which only the trapped context holds. */
+        if (isa_rewrite_trap_context(isa_table,info->ContextRecord,(uintptr_t)record->ExceptionAddress))
+            return EXCEPTION_CONTINUE_EXECUTION;
         /* An int3 ISA site: emulated here; any other breakpoint goes on to the report below. */
         IsaRegs regs;
         uintptr_t rip;
@@ -1093,9 +1096,24 @@ int main(int argc, char **argv) {
     }
     if (!cpu_supported(missing, sizeof missing)) return 20;
     if (cpu_missing_sets) printf("CPU: missing %s\n", missing);
-    /* THEORDER_ISA_REWRITE=0 never rewrites, =1 rewrites every site; by default the sets the CPU lacks. */
+    /* THEORDER_ISA_REWRITE=0 never rewrites, =1 rewrites every site, a list of sets
+     * (MOVBE+BMI1+LZCNT = Ivy Bridge; ',' also separates) rewrites them as well as those the CPU lacks: an older CPU's
+     * path on this one. By default the sets the CPU lacks. */
     const char *policy = getenv("THEORDER_ISA_REWRITE");
     unsigned isa_sets = policy && !strcmp(policy, "1") ? 0xffffffffu : policy && !strcmp(policy, "0") ? 0 : cpu_missing_sets;
+    if (policy && *policy && strcmp(policy, "1") && strcmp(policy, "0")) {
+        unsigned forced = 0;
+        char forced_names[64];
+        if (!cpu_parse_rewrite_sets(policy, &forced, forced_names, sizeof forced_names)) {
+            printf("STOP: THEORDER_ISA_REWRITE=%s: expected 0, 1 or a list of MOVBE, F16C, BMI1, LZCNT\n", policy);
+            return 20;
+        }
+        printf("ISA: rewrite of %s forced (THEORDER_ISA_REWRITE)\n", forced_names);
+        if (!cpu_missing_sets) snprintf(missing, sizeof missing, "%s", forced_names);
+        isa_sets = forced | cpu_missing_sets;
+    } else if (isa_sets == 0xffffffffu && !cpu_missing_sets) {
+        snprintf(missing, sizeof missing, "MOVBE, F16C, BMI1, LZCNT (forced)");
+    }
     if (cpu_missing_sets && !isa_sets) {
         printf("STOP: this CPU lacks %s and the rewrite is disabled (ISA_REWRITE=0)\n", missing);
         return 20;
@@ -1269,7 +1287,8 @@ int main(int argc, char **argv) {
         }
     }
     isa_table = isa_sets && isa_file ? isa_table_load(isa_file) : NULL;
-    if (!isa_table && cpu_missing_sets) { printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing); return 20; }
+    /* isa_sets: what the CPU lacks, or what THEORDER_ISA_REWRITE forces (a test that must not run unrewritten). */
+    if (!isa_table && isa_sets) { printf("STOP: this CPU lacks %s and no rewrite table matches the image\n", missing); return 20; }
     /* The stubs follow the image in the same low mapping (rel32 jmps reach them). */
     size_t isa_stub_size = isa_table ? round_page(isa_stub_area_size(isa_table)) : 0;
     size_t stub_area = isa_stub_size + 65536;

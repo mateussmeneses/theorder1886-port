@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 enum { HEADER_BYTES = 64, RECORD_BYTES = 64, MAX_SITES = 1u << 20, JMP_BYTES = 5 };
 
@@ -68,7 +71,8 @@ static uint32_t read_u32(const unsigned char *p) {
 static int register_valid(uint8_t reg) { return reg <= 15 || reg == ISA_NO_REG; }
 
 /* Field ranges of spec 4.4, plus what the patch writes: a 5-byte jmp needs a 5-byte site (mode 0)
- * or a relocated instruction (mode 1), an int3 site is 4 bytes, and every write stays inside the image.
+ * or a relocated instruction (mode 1), an int3 site is 4 bytes (VCVTPH2PS xmm, xmm: any length), and
+ * every write stays inside the image.
  * The writer stores scale 0 without a memory operand, else iced's scale (1 when there is no index). */
 static int record_valid(const IsaSite *s, uint64_t image_size) {
     if (s->length < 4 || s->length > 15 || s->relocated_length > 15) return 0;
@@ -80,7 +84,10 @@ static int record_valid(const IsaSite *s, uint64_t image_size) {
     if (s->scale != 1 && s->scale != 2 && s->scale != 4 && s->scale != 8 && !(s->scale == 0 && s->index == ISA_NO_REG))
         return 0;
     if (s->mode == ISA_MODE_JMP && s->length < JMP_BYTES) return 0;
-    if (s->mode == ISA_MODE_INT3 && s->length != 4) return 0;
+    /* VCVTPH2PS xmm, xmm traps whatever its length (5): the handler emulates it on XMM registers. */
+    const int vector_int3 = s->kind == ISA_VCVTPH2PS && s->mem_slot == ISA_MEM_NONE && s->dst <= 15 && s->src1 <= 15;
+    if (s->mode == ISA_MODE_INT3 && s->length != 4 && !vector_int3) return 0;
+    if (s->mode == ISA_MODE_INT3 && s->kind == ISA_VCVTPH2PS && !vector_int3) return 0;
     if (s->mode == ISA_MODE_JMP_RELOCATE && (s->length != 4 || s->relocated_length == 0)) return 0;
     uint64_t end = s->mode == ISA_MODE_JMP_RELOCATE ? 4u + s->relocated_length : s->length;
     return s->offset <= image_size && end <= image_size - s->offset;
@@ -234,13 +241,22 @@ static void patch_site(unsigned char *site, const IsaSite *s, int32_t rel) {
     memset(p, 0x90, covered - JMP_BYTES);
 }
 
+static int is_vector_kind(uint8_t kind) { return kind == ISA_VCVTPH2PS || kind == ISA_VCVTPS2PH; }
+
 IsaReport isa_rewrite_apply(IsaTable *t, unsigned char *image, unsigned char *stubs, unsigned sets) {
     IsaReport report = {0};
     t->image = image;
     t->stubs = stubs;
     isa_emulate_set_image(image);
-    for (uint32_t i = 0; i < t->count; i++)
-        if (t->sites[i].mode == ISA_MODE_UNSUPPORTED && (isa_site_set(&t->sites[i]) & sets)) report.unsupported_needed++;
+    for (uint32_t i = 0; i < t->count; i++) {
+        const IsaSite *s = &t->sites[i];
+        /* XMM sites are emulated by the Windows int3 handler only (probe.c, the trapped CONTEXT). */
+        int handled = s->mode != ISA_MODE_UNSUPPORTED;
+#ifndef _WIN32
+        handled &= !is_vector_kind(s->kind);
+#endif
+        if (!handled && (isa_site_set(s) & sets)) report.unsupported_needed++;
+    }
     if (report.unsupported_needed) return report;
     for (uint32_t i = 0; i < t->count; i++) {
         const IsaSite *s = &t->sites[i];
@@ -290,8 +306,9 @@ IsaReport isa_rewrite_apply(IsaTable *t, unsigned char *image, unsigned char *st
 
 /* ---- int3 trap, stub lookup, report ---- */
 
-int isa_rewrite_trap(IsaTable *t, uintptr_t address, IsaRegs *regs, uintptr_t *next_rip) {
-    if (!t || !t->image || address < (uintptr_t)t->image) return 0;
+/* Index of the applied int3 site at address, or -1. */
+static int64_t trapped_site(const IsaTable *t, uintptr_t address) {
+    if (!t || !t->image || address < (uintptr_t)t->image) return -1;
     uint64_t offset = address - (uintptr_t)t->image;
     uint32_t lo = 0, hi = t->count;
     while (lo < hi) {
@@ -299,13 +316,49 @@ int isa_rewrite_trap(IsaTable *t, uintptr_t address, IsaRegs *regs, uintptr_t *n
         if (t->sites[mid].offset < offset) lo = mid + 1;
         else hi = mid;
     }
-    if (lo == t->count || t->sites[lo].offset != offset) return 0;
-    if (t->sites[lo].mode != ISA_MODE_INT3 || *(const unsigned char *)address != 0xcc) return 0;
-    isa_emulate(&t->sites[lo], regs);
-    t->hits[lo]++;
-    *next_rip = address + t->sites[lo].length;
+    if (lo == t->count || t->sites[lo].offset != offset) return -1;
+    if (t->sites[lo].mode != ISA_MODE_INT3 || *(const unsigned char *)address != 0xcc) return -1;
+    return lo;
+}
+
+int isa_rewrite_trap(IsaTable *t, uintptr_t address, IsaRegs *regs, uintptr_t *next_rip) {
+    const int64_t i = trapped_site(t, address);
+    if (i < 0 || is_vector_kind(t->sites[i].kind)) return 0;   /* XMM sites: isa_rewrite_vector_trap */
+    isa_emulate(&t->sites[i], regs);
+    t->hits[i]++;
+    *next_rip = address + t->sites[i].length;
     return 1;
 }
+
+const IsaSite *isa_rewrite_vector_trap(IsaTable *t, uintptr_t address) {
+    const int64_t i = trapped_site(t, address);
+    if (i < 0 || !is_vector_kind(t->sites[i].kind)) return NULL;
+    t->hits[i]++;
+    return &t->sites[i];
+}
+
+#ifdef _WIN32
+/* VCVTPH2PS xmm, xmm (F16C, which Sandy Bridge lacks) on the trapped context: the source's four
+ * halves become four singles in the destination, whose bits 255:128 are zeroed as VEX.128 does
+ * (in the AVX part of the extended state, when the context carries it). */
+int isa_rewrite_trap_context(IsaTable *t, void *context, uintptr_t address) {
+    const IsaSite *site = isa_rewrite_vector_trap(t, address);
+    if (!site) return 0;
+    CONTEXT *c = context;
+    M128A *xmm = c->FltSave.XmmRegisters;
+    uint64_t out[2];
+    isa_vcvtph2ps(xmm[site->src1 & 15].Low, out);
+    xmm[site->dst & 15].Low = out[0];
+    xmm[site->dst & 15].High = (LONGLONG)out[1];
+    if ((c->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE) {
+        DWORD length = 0;
+        M128A *upper = LocateXStateFeature(c, XSTATE_AVX, &length);
+        if (upper && length >= 16 * sizeof(M128A)) memset(&upper[site->dst & 15], 0, sizeof(M128A));
+    }
+    c->Rip = (DWORD64)(address + site->length);
+    return 1;
+}
+#endif
 
 int isa_rewrite_site_of_stub(const IsaTable *t, uintptr_t rip) {
     if (!t || !t->stubs || rip < (uintptr_t)t->stubs) return -1;

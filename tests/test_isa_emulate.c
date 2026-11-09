@@ -269,8 +269,40 @@ static void check_memory_sources(void) {
     }
 }
 
+/* VCVTPH2PS emulation against the host's F16C over every half: zeros, subnormals, infinities and
+ * NaNs (quieted, payload kept) included. Built with -mf16c; skipped on a host without F16C. */
+#include <immintrin.h>
+static int check_half_to_float(void) {
+    for (uint32_t h = 0; h <= 0xffff; ++h) {
+        const __m128 native = _mm_cvtph_ps(_mm_cvtsi32_si128((int)h));
+        uint32_t expected;
+        memcpy(&expected, &native, sizeof expected);
+        if (isa_half_to_float((uint16_t)h) != expected) {
+            printf("isa-emulate-test FAILED: vcvtph2ps %04" PRIx32 " -> %08" PRIx32 ", host %08" PRIx32 "\n",
+                   h, isa_half_to_float((uint16_t)h), expected);
+            return 1;
+        }
+    }
+    const uint64_t halves = 0xfc00bc0003ff7bffull;   /* -inf, -1, largest subnormal, largest normal */
+    uint64_t out[2];
+    isa_vcvtph2ps(halves, out);
+    const __m128 native = _mm_cvtph_ps(_mm_set_epi64x(0, (long long)halves));
+    uint64_t expected[2];
+    memcpy(expected, &native, sizeof expected);
+    if (out[0] != expected[0] || out[1] != expected[1]) {
+        puts("isa-emulate-test FAILED: vcvtph2ps lane order");
+        return 1;
+    }
+    return 0;
+}
+
 int main(void) {
     char missing[128];
+    if (cpu_missing_rewritable(cpu_feature_words(), missing, sizeof missing) & CPU_SET_F16C) {
+        puts("isa-emulate-test: F16C check skipped, CPU lacks F16C");
+    } else if (check_half_to_float()) {
+        return 1;
+    }
     if (cpu_missing_rewritable(cpu_feature_words(), missing, sizeof missing) & (CPU_SET_MOVBE | CPU_SET_BMI1 | CPU_SET_LZCNT)) {
         puts("isa-emulate-test skipped: CPU lacks BMI1, LZCNT or MOVBE");
         return 0;

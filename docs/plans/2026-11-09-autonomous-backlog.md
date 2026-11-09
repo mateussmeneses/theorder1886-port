@@ -137,3 +137,28 @@ Ficam no `docs/BACKLOG.md` com o estado atual.
 ## 6. Diário
 
 (preenchido durante a execução)
+
+### 2026-11-09 — Fase 0 concluída (`c6dc7b7`)
+
+H1/H2/H3 feitos. O lote `r4p5` (5 + 5, já executado na sessão anterior) reproduziu a falha do
+FSR 4 no boot: 2 ocorrências em 50 execuções. Totais nos 5 lotes: base 24/25, idle2 23/25.
+
+### S1/S2 — análise, sem correção (aberto)
+
+- `r4p5/idle2-02` simbolizado na imagem `970b9d33…`: `Scheduler::Finish` (`mov 0x40(%rcx)`,
+  `rcx` = 0) ← `Fsr4Upscaler::Impl::Destroy` (vk_fsr4.cpp:93) ← `~Impl` ← `~Fsr4Upscaler` ←
+  `TemporalUpscaler::OnFrameStart` (vk_temporal_upscaler.cpp:317) ← `Rasterizer::DrawRecord`.
+- `Destroy` só chega ao `Finish` se `backend_ok` ou `context_ok` estiver ligado; o `Impl`
+  destruído é o criado no construtor do `TemporalUpscaler` e nunca usado (as duas flags
+  nascem `false`). Ler flag ligada e `scheduler` nulo num objeto intocado significa que a memória
+  do `Impl` (ou o ponteiro para ele) mudou antes do frame 1: corrupção de heap ou uso após
+  liberação por outro código. O `TemporalUpscaler` é criado uma vez (`vk_rasterizer.cpp:75`);
+  a única chamada de outra thread (`DisplayOverride`, presenter) não toca no `fsr4`.
+- ASan descartado: a sombra dinâmica do ASan no Windows reserva uma faixa grande de endereços que
+  pode colidir com a faixa fixa do guest (64 GiB – 1 TiB, `--disable-high-entropy-va`). Page heap
+  (gflags) exige alterar o registro da máquina (HKLM): fora das regras da sessão.
+- S2 (`nvoglv64.dll` dentro de `vkWaitForFences`, 1 ocorrência) não tem mais dados que o log.
+- Próximo passo possível (não feito): verificação opt-in da integridade do `Impl` a cada frame
+  para datar a corrupção; ou page heap com autorização do usuário.
+- S3 dispensado: a taxa já está medida (3 falhas de boot em 54 execuções do build corrigido,
+  0 em 44 do v0.8.0, Fisher p = 0,25).

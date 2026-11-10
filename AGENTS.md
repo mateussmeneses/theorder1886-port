@@ -39,7 +39,7 @@ Run the narrowest relevant test after each change, then the full test/build gate
 The current checkout prioritizes a queued graphics pipeline when a visible draw must wait for it. `THEORDER_VISIBLE_PIPELINE_PRIORITY=0` restores FIFO behavior. This can promote queued work but cannot preempt an active driver compile. Preserve that behavior and its regression tests unless controlled evidence justifies a change. Treat the first visit to a scene and a warm-cache revisit as separate measurements; never drop a required draw to improve frame-time metrics.
 
 ## Local Review Guidance
-For code review or bug diagnosis, consult `C:\projetos\fork\ponytail\AGENTS.md` and the relevant skill under `C:\projetos\fork\skills\skills\engineering\` when those local repositories are available. Use them as read-only guidance; do not install plugins or modify those repositories. Keep the smallest complete change, require a symptom-specific check, and report unverified hardware/capture risks.
+For code review or bug diagnosis, consult `C:\projetos\ponytail\AGENTS.md` and the relevant skill under `C:\projetos\skills\skills\engineering\` when those local repositories are available. Use them as read-only guidance; do not install plugins or modify those repositories. Keep the smallest complete change, require a symptom-specific check, and report unverified hardware/capture risks.
 
 <!-- AIWH:BEGIN -->
 ## AI Workbench project context

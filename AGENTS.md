@@ -33,6 +33,8 @@ bash packaging/windows/package.sh
 
 The build writes development binaries under `out/`; packaging writes `dist/theorder1886-windows/` and its ZIP. Packaging needs a python.org interpreter (`WINPYTHON` may select it). Do not replace a package directory while the game is running from it; package to a separate destination or wait for the user to close that process.
 
+Before every release (version bump, package for the user's test, tag), review every change since the last release tag: the two-axis review of `C:\projetos\skills\skills\engineering\code-review` (Standards against this file, `CONTRIBUTING.md` and `C:\projetos\ponytail\AGENTS.md`; Spec against the plan, issues and release notes), with emitted machine code and patches checked byte by byte. Fix or state every finding, rerun the gates, record the result in `docs/REVIEW_v<version>.md`, and only then package.
+
 Run the narrowest relevant test after each change, then the full test/build gates required by the touched subsystem. For frame-time investigations, use `tools/batch_runs.py` with isolated profile roots and report the exact manifest/capture conditions. Do not infer gameplay correctness from a title-screen or menu smoke test.
 
 ## Stutter-Specific Guardrails

@@ -240,3 +240,17 @@ Loads MOVBE agora são inline (MOV + BSWAP). A/B intercalado 3+3+3: P99 de volta
   tempo de frame (dt × 30) e drena o medidor por segundo; a 60 FPS cada aperto vale 0,5, a 120 FPS
   0,25. Patch de 1 byte (jbe → jmp): aperto vale sempre 1,0, como a 30 FPS; entra junto com todo
   patch de taxa de quadros. Não verificado em jogo (a rota com script não chega ao QTE).
+
+## Fase 7 — rumo à v0.8.2 (após a release v0.8.1, 2026-11-10)
+
+Relatos do usuário no teste (feito no pacote v0.8.0, cache frio) e o que já se sabe:
+
+| ID | Item | Estado / próximo passo | Aceite |
+|---|---|---|---|
+| F1 | Flicker de objetos/decals (cartaz em Whitechapel alterna a cada frame) | Reproduzido com o save do usuário; existe na v0.7.9. `stale_readback` suspeito numa execução, não confirmado em 3+3. Próximo: medir só a região do objeto (máscara fixa, câmera parada), depois capturar o frame inteiro (`--frame-capture-at`) nos dois estados. | Causa demonstrada; A/B 3+3 com máscara mostra o objeto estável |
+| F2 | Stutter forte | Sessão do usuário era cache frio (1374 pipelines). Separar: (a) cache frio → pré-compilação/warm-up; (b) permutações novas de material (#113). | Medir frio vs quente no mesmo save; um passo mensurável implementado |
+| F3 | Granadas sem fumaça | Não reproduzido; falta a cena (perguntado ao usuário). | Efeito visível na cena, captura antes/depois |
+| F4 | Legendas ausentes | Confirmado na cutscene do save. Os pacotes de localização sem parte GPU (18) não foram pedidos nessa cena. Próximo: rastrear o gerenciador de diálogos (WIP do usuário, `sub_a70fd0`) numa cutscene. | Legenda visível na cutscene |
+| R1 | "Write windows" (UFC-69/PORTHEON): cópias da libc perto de dados GPU sem readback | Estudo de porte; ataca os 90 % de downloads com escritor no frame aberto. | A/B de ms/s de download e frame time |
+| R2 | Backport shadPS4 #5264 (EarlyFragmentTests + DEPTH_BEFORE_SHADER) | Avaliar contra o flicker F1. | A/B visual |
+| T1 | Ferramenta de captura grava `rgba` quando os dados são `bgra` (cores azuladas nas prévias) | Corrigir o rótulo no dump do build atual. | Prévia com cores corretas sem `--raw-format` |

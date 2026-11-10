@@ -143,6 +143,17 @@ PS4_TO_ENGINE_LANG = {
     16: 9, 17: 17, 18: 1, 19: 15, 20: 16
 }
 
+# Builds without the PT-BR (engine 17) assets; Portuguese plays as PT-PT (7) there.
+NO_PT_BR_TITLES = ('CUSA00076', 'CUSA00070', 'CUSA00035')
+
+
+def engine_language(ps4_lang, title_id):
+    """The engine's language id for a PS4 one; PT-BR falls back to PT-PT on builds without it."""
+    if ps4_lang == 17 and title_id in NO_PT_BR_TITLES:
+        return 7
+    return PS4_TO_ENGINE_LANG.get(ps4_lang, ps4_lang)
+
+
 LANG_CODE_TO_PS4 = {
     'ja': 0, 'japanese': 0,
     'en': 1, 'en-us': 1, 'us': 1, 'english': 1,
@@ -471,12 +482,11 @@ def main():
         env['THEORDER_RESTART_COMMAND'] = restart_cmd
         # Resolve language & pass guest arguments
         ps4_lang = resolve_language(cli_lang, env, env['THEORDER_CONFIG'], graphics_options)
-        engine_lang = PS4_TO_ENGINE_LANG.get(ps4_lang, ps4_lang)
-        if ps4_lang == 17:
-            title_id = profile[1] if profile and len(profile) > 1 else ''
-            if title_id in ('CUSA00076', 'CUSA00070', 'CUSA00035'):
-                engine_lang = 7
-                print(f'Language: Title {title_id} lacks native PT-BR assets, mapping Portuguese to engine id 7 (PT-PT)', flush=True)
+        # profile[1] is the patch XML, not the title: read the title ID from param.sfo.
+        title_id = patches.game_title_id(game) or ''
+        engine_lang = engine_language(ps4_lang, title_id)
+        if ps4_lang == 17 and engine_lang == 7:
+            print(f'Language: Title {title_id} lacks native PT-BR assets, mapping Portuguese to engine id 7 (PT-PT)', flush=True)
         env['THEORDER_LANGUAGE'] = str(ps4_lang)
         print(f'Language: PS4 id {ps4_lang} -> engine id {engine_lang}', flush=True)
 

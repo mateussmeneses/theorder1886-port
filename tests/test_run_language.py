@@ -79,5 +79,20 @@ class RunLanguageTests(unittest.TestCase):
         self.assertEqual(self.resolve(), 1)
 
 
+class EngineLanguageTest(unittest.TestCase):
+    """PT-BR (PS4 id 17) plays as PT-PT on builds without its assets; the title comes from param.sfo."""
+
+    def test_pt_br_falls_back_on_builds_without_it(self):
+        for title in ('CUSA00035', 'CUSA00076', 'CUSA00070'):
+            self.assertEqual(run.engine_language(17, title), 7, title)
+
+    def test_pt_br_kept_where_it_exists(self):
+        self.assertEqual(run.engine_language(17, 'CUSA00785'), 17)
+
+    def test_other_languages_use_the_table(self):
+        self.assertEqual(run.engine_language(1, 'CUSA00035'), 0)
+        self.assertEqual(run.engine_language(0, 'CUSA00035'), 18)
+
+
 if __name__ == '__main__':
     unittest.main()

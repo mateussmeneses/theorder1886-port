@@ -87,3 +87,13 @@ cleared), the next candidate for an inline sequence if older CPUs need more.
 No run on a real Sandy or Ivy Bridge CPU. A forced rewrite on a newer CPU executes the same
 patched code, but not the older CPU's timing, cache sizes or driver; the reporter's confirmation
 is still needed.
+
+### Inline BEXTR (`baf6c5c`), 2026-11-10
+
+Register BEXTR (no rsp operand) also runs inline; the result and ZF/CF/OF match the host's BEXTR
+in 2352 cases per snippet (`isa-stub-test`). The frame-time A/B on 2026-11-10 is inconclusive:
+two 3 + 3 interleaved batches had native runs themselves at P99 24-49 ms (18 ms on 2026-11-09),
+with uncontrolled background load on the host (other applications) and, in the first batch, port
+cache misses that varied between runs from the same profile copy. Both paths degraded together
+(second batch P99: native 30.4 / 23.9 / 32.7, Sandy path 34.9 / 26.3 / 39.6). A clean repeat is
+needed before claiming a gain over the MOVBE-only result above.

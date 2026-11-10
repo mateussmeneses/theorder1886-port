@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <cstdlib>
+#include <string_view>
+
 #include <span>
 #include <unordered_map>
 
@@ -60,6 +63,16 @@ public:
     /// format natively. When false, GetSupportedFormat remaps the Snorm surface to the unsigned
     /// Uint view and the recompiled shader must reconstruct the sign (see
     /// Profile::needs_snorm_2101010_expand). NVIDIA (the repro machine) returns true here.
+    /// port (diagnosis): THEORDER_SNORM2101010=unorm views an unsupported 2_10_10_10 Snorm surface
+    /// as Unorm without the in-shader expand, instead of the Uint view + expand.
+    static bool Snorm2101010AsUnorm() {
+        static const bool unorm = [] {
+            const char* env = std::getenv("THEORDER_SNORM2101010");
+            return env && std::string_view{env} == "unorm";
+        }();
+        return unorm;
+    }
+
     bool IsSnorm2101010Supported() const {
         return IsFormatSupported(vk::Format::eA2B10G10R10SnormPack32,
                                  vk::FormatFeatureFlagBits2::eSampledImage);

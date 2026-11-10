@@ -1104,6 +1104,10 @@ vk::Format Instance::GetSupportedFormat(const vk::Format format,
             // should restore the hue), still to be verified with a capture - it must not be
             // claimed fixed from this code alone. See liverpool_to_vk.h Snorm2101010HostView /
             // Snorm2101010FallbackPreservesSign (format-remap-test).
+            if (Snorm2101010AsUnorm() &&
+                IsFormatSupported(vk::Format::eA2B10G10R10UnormPack32, flags)) {
+                return vk::Format::eA2B10G10R10UnormPack32;
+            }
             if (IsFormatSupported(vk::Format::eA2B10G10R10UintPack32, flags)) {
                 return vk::Format::eA2B10G10R10UintPack32;
             }

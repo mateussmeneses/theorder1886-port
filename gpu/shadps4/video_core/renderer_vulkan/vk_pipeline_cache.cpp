@@ -619,7 +619,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         // Instance::IsSnorm2101010Supported / GetSupportedFormat). This is active on ANY host that
         // lacks the Snorm pack format, including the NVIDIA RTX 5060 repro machine - so "no NVIDIA
         // regression" must be verified at runtime (capture), not assumed from the gate.
-        .needs_snorm_2101010_expand = !instance.IsSnorm2101010Supported(),
+        .needs_snorm_2101010_expand = !instance.IsSnorm2101010Supported() && !Instance::Snorm2101010AsUnorm(),
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,

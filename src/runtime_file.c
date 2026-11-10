@@ -215,7 +215,11 @@ static int try_fallback_path(const char *in_path, char *out_path, size_t out_siz
         snprintf(out_path, out_size, "%.*s%cps4%cprimary%c3861c21fc34b7612%c%s",
                  (int)prefix_len, in_path, sep, sep, sep, sep, suffix);
         HostStat st;
-        if (host_stat(out_path, &st) == 0 && S_ISREG(st.st_mode)) return 1;
+        const int found = host_stat(out_path, &st) == 0 && S_ISREG(st.st_mode);
+        static int trace = -1;
+        if (trace < 0) { const char *e = getenv("THEORDER_FILE_FALLBACK_TRACE"); trace = e && e[0] == '1'; }
+        if (trace) printf("File fallback: %s -> %s (%s)\n", in_path, out_path, found ? "found" : "missing");
+        if (found) return 1;
     }
     return 0;
 }

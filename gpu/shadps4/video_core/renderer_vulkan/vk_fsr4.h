@@ -53,6 +53,7 @@ public:
 private:
     struct Impl;
     std::unique_ptr<Impl> impl;
+    Impl* expected; ///< port: impl as created (diagnosis of boot fault S1)
 };
 
 } // namespace Vulkan

@@ -53,7 +53,14 @@ FfxFsr4ModelPreset ModelPreset(int preset) {
 
 } // namespace
 
+// port: boot fault S1 (docs/plans/2026-11-09-autonomous-backlog.md): an Impl created at startup
+// and destroyed at the first upscaler switch read a null scheduler, so its memory (or the pointer
+// to it) had changed. The canaries and Fsr4Upscaler::expected tell which, logged before the
+// destruction goes on as before.
+constexpr u64 Fsr4Canary = 0x46535234494d504cull; // "FSR4IMPL"
+
 struct Fsr4Upscaler::Impl {
+    u64 canary_head = Fsr4Canary;
     const Instance& instance;
     Scheduler& scheduler;
     std::vector<u8> scratch;
@@ -71,6 +78,7 @@ struct Fsr4Upscaler::Impl {
     std::unique_ptr<Fsr411::Upscaler> fsr411;
     std::deque<u64> fsr411_ticks; ///< scheduler ticks of its recent frames (constant ring)
     std::string fsr411_described;
+    u64 canary_tail = Fsr4Canary;
 
     Impl(const Instance& instance_, Scheduler& scheduler_)
         : instance{instance_}, scheduler{scheduler_} {}
@@ -379,9 +387,27 @@ struct Fsr4Upscaler::Impl {
 };
 
 Fsr4Upscaler::Fsr4Upscaler(const Instance& instance, Scheduler& scheduler)
-    : impl{std::make_unique<Impl>(instance, scheduler)} {}
+    : impl{std::make_unique<Impl>(instance, scheduler)}, expected{impl.get()} {}
 
-Fsr4Upscaler::~Fsr4Upscaler() = default;
+Fsr4Upscaler::~Fsr4Upscaler() {
+    if (impl.get() != expected) {
+        std::printf("FSR 4: context pointer changed before destruction: %p, created %p\n",
+                    static_cast<void*>(impl.get()), static_cast<void*>(expected));
+        std::fflush(stdout);
+    } else if (impl && (impl->canary_head != Fsr4Canary || impl->canary_tail != Fsr4Canary)) {
+        const auto* bytes = reinterpret_cast<const u8*>(impl.get());
+        std::printf("FSR 4: context %p memory changed before destruction (head %016llx, tail "
+                    "%016llx); %zu bytes:",
+                    static_cast<void*>(impl.get()),
+                    static_cast<unsigned long long>(impl->canary_head),
+                    static_cast<unsigned long long>(impl->canary_tail), sizeof(Impl));
+        for (size_t i = 0; i < sizeof(Impl); ++i) {
+            std::printf("%s%02x", i % 32 ? "" : "\n  ", bytes[i]);
+        }
+        std::printf("\n");
+        std::fflush(stdout);
+    }
+}
 
 bool Fsr4Upscaler::Record(const Frame& frame) {
     return impl->Record(frame);

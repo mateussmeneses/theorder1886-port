@@ -44,6 +44,15 @@ static const uint8_t S7_CODE[] = {0x0f, 0x38, 0xf0, 0x47, 0x00, 0xc3};
 static const uint8_t S8_CODE[] = {0x48, 0x0f, 0x38, 0xf0, 0x47, 0x08, 0xc3};
 static const uint8_t S9_CODE[] = {0x44, 0x0f, 0x38, 0xf0, 0x0f, 0x44, 0x89, 0xc8, 0xc3};
 enum { S7 = 0x240, S8 = 0x260, S9 = 0x280 };
+/* BEXTR inline: S10 bextr eax,edi,esi ; ret
+ * S11 mov edx,edi ; mov eax,esi ; bextr ecx,edx,eax ; mov eax,ecx ; ret   (every operand a saved scratch)
+ * S12 bextr rax,rdi,rsi ; ret
+ * S13 mov r10d,edi ; mov r11d,esi ; bextr r9d,r10d,r11d ; mov eax,r9d ; ret */
+static const uint8_t S10_CODE[] = {0xc4, 0xe2, 0x48, 0xf7, 0xc7, 0xc3};
+static const uint8_t S11_CODE[] = {0x89, 0xfa, 0x89, 0xf0, 0xc4, 0xe2, 0x78, 0xf7, 0xca, 0x89, 0xc8, 0xc3};
+static const uint8_t S12_CODE[] = {0xc4, 0xe2, 0xc8, 0xf7, 0xc7, 0xc3};
+static const uint8_t S13_CODE[] = {0x41, 0x89, 0xfa, 0x41, 0x89, 0xf3, 0xc4, 0x42, 0x20, 0xf7, 0xca, 0x44, 0x89, 0xc8, 0xc3};
+enum { S10 = 0x2a0, S11 = 0x2c0, S12 = 0x2e0, S13 = 0x300 };
 
 static unsigned char *region, *image, *stubs;
 static unsigned char pristine[PAGE];
@@ -369,6 +378,73 @@ static void test_inline_movbe_load(void) {
     assert(t->hits[0] == 2 && t->hits[1] == 1 && t->hits[2] == 1);
 }
 
+/* rax and ZF/CF/OF (bits 0-2) after calling fn(rdi = a, rsi = b) */
+static uint64_t call_flags(void *fn, uint64_t a, uint64_t b, unsigned *flags) {
+    uint64_t result;
+    unsigned char zf, cf, of;
+    __asm__ volatile("stc\n\tleaq -128(%%rsp), %%rsp\n\tcall *%[fn]\n\tleaq 128(%%rsp), %%rsp\n\t"
+                     "setz %[zf]\n\tsetc %[cf]\n\tseto %[of]"
+                     : "=a"(result), [zf] "=r"(zf), [cf] "=r"(cf), [of] "=r"(of), "+D"(a), "+S"(b)
+                     : [fn] "r"(fn)
+                     : "rcx", "rdx", "r8", "r9", "r10", "r11", "memory", "cc");
+    *flags = zf | cf << 1 | of << 2;
+    return result;
+}
+
+static uint64_t native_bextr(uint64_t src, uint64_t ctrl, int w, unsigned *flags) {
+    uint64_t r;
+    unsigned char zf, cf, of;
+    if (w) __asm__("bextr %4, %3, %0\n\tsetz %1\n\tsetc %2" : "=r"(r), "=r"(zf), "=r"(cf) : "r"(src), "r"(ctrl) : "cc");
+    else {
+        uint32_t r32;
+        __asm__("bextr %k4, %k3, %k0\n\tsetz %1\n\tsetc %2" : "=r"(r32), "=r"(zf), "=r"(cf) : "r"(src), "r"(ctrl) : "cc");
+        r = r32;
+    }
+    of = 0;   /* BEXTR clears OF */
+    *flags = zf | cf << 1 | of << 2;
+    return r;
+}
+
+static void test_inline_bextr(void) {
+    reset_region();
+    IsaSite sites[4] = {site_at(S10, 5, ISA_BEXTR, ISA_MODE_JMP, 0, 7), site_at(S11 + 4, 5, ISA_BEXTR, ISA_MODE_JMP, 1, 2),
+                        site_at(S12, 5, ISA_BEXTR, ISA_MODE_JMP, 0, 7), site_at(S13 + 6, 5, ISA_BEXTR, ISA_MODE_JMP, 9, 10)};
+    sites[0].src2 = 6;
+    sites[1].src2 = 0;
+    sites[2].src2 = 6;
+    sites[2].width = 64;
+    sites[3].src2 = 11;
+    IsaTable *t = table_of(sites, 4);
+    IsaReport r = isa_rewrite_apply(t, image, stubs, CPU_SET_BMI1);
+    assert(r.rewritten == 4 && r.skipped == 0);
+    const uint64_t target = (uint64_t)(uintptr_t)isa_emulate;
+    for (int i = 0; i < 4; i++)
+        for (int at = 0; at + 10 <= ISA_STUB_BYTES; at++)
+            assert(!(stubs[i * ISA_STUB_BYTES + at] == 0x48 && stubs[i * ISA_STUB_BYTES + at + 1] == 0xb8 &&
+                     memcmp(stubs + i * ISA_STUB_BYTES + at + 2, &target, 8) == 0));
+    void *fns[4] = {image + S10, image + S11, image + S12, image + S13};
+    static const uint8_t fields[] = {0, 1, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 200, 255};
+    for (int f = 0; f < 4; f++) {
+        const int w = f == 2;
+        for (unsigned i = 0; i < sizeof fields; i++)
+            for (unsigned j = 0; j < sizeof fields; j++)
+                for (int v = 0; v < 3; v++) {
+                    const uint64_t src = v == 0 ? 0 : v == 1 ? 0xffffffffffffffffull : 0x8badf00ddeadbeefull;
+                    const uint64_t ctrl = fields[i] | (uint64_t)fields[j] << 8 | 0xabcd0000ull;
+                    unsigned got_flags, want_flags;
+                    const uint64_t got = call_flags(fns[f], src, ctrl, &got_flags);
+                    const uint64_t want = native_bextr(src, ctrl, w, &want_flags);
+                    if ((w ? got : (uint32_t)got) != want || got_flags != want_flags) {
+                        fprintf(stderr, "bextr snippet %d src %llx ctrl %llx: %llx flags %x, native %llx flags %x\n", f,
+                                (unsigned long long)src, (unsigned long long)ctrl, (unsigned long long)got, got_flags,
+                                (unsigned long long)want, want_flags);
+                        abort();
+                    }
+                    if (!w) assert(got >> 32 == 0);
+                }
+    }
+}
+
 static void test_int3_site_via_handler(void) {
     reset_region();
     IsaTable *t = snippet_table();
@@ -538,6 +614,10 @@ int main(int argc, char **argv) {
     memcpy(pristine + S7, S7_CODE, sizeof S7_CODE);
     memcpy(pristine + S8, S8_CODE, sizeof S8_CODE);
     memcpy(pristine + S9, S9_CODE, sizeof S9_CODE);
+    memcpy(pristine + S10, S10_CODE, sizeof S10_CODE);
+    memcpy(pristine + S11, S11_CODE, sizeof S11_CODE);
+    memcpy(pristine + S12, S12_CODE, sizeof S12_CODE);
+    memcpy(pristine + S13, S13_CODE, sizeof S13_CODE);
     test_jmp_site();
     test_relocated_site();
     test_adjacent_sites();
@@ -551,6 +631,7 @@ int main(int argc, char **argv) {
     test_int3_site_via_handler();
     test_vector_int3_via_handler();
     test_inline_movbe_load();
+    test_inline_bextr();
     test_trap_unknown_address();
     test_site_of_stub();
     test_report_top_sites();

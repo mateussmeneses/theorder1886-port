@@ -212,6 +212,64 @@ static size_t emit_inline_movbe_load(unsigned char *p, const IsaSite *s) {
     return (size_t)(p - start);
 }
 
+/* BEXTR dst, src, ctrl between registers (none of them rsp), inline: rax/rcx/rdx are saved below the
+ * red zone and the operands read from their saved slots when they are one of those three.
+ * start = ctrl[7:0], len = ctrl[15:8]; result = start < size ? (src >> start) masked to len bits
+ * (no mask when len >= size) : 0; the closing TEST sets ZF from it and clears CF and OF, the flags
+ * BEXTR defines (AF, SF, PF are undefined). 32-bit forms use 32-bit operations, so the result is
+ * zero-extended. Returns the bytes written, 0 when the site is not of that form. */
+static void emit_reg_to(unsigned char **p, uint8_t reg, uint8_t to /* 0 rax, 2 rdx */) {
+    static const uint8_t slot[3] = {16, 8, 0};   /* [rsp+n] after push rax; push rcx; push rdx */
+    if (reg <= 2) {
+        emit_bytes(p, (const uint8_t[]){0x48, 0x8b, (uint8_t)(0x44 | (to << 3)), 0x24, slot[reg]}, 5);
+    } else {
+        emit_bytes(p, (const uint8_t[]){(uint8_t)(0x48 | (reg >= 8 ? 0x04 : 0)), 0x89,
+                                        (uint8_t)(0xc0 | ((reg & 7) << 3) | to)}, 3);   /* mov r(to), r(reg) */
+    }
+}
+
+static size_t emit_inline_bextr(unsigned char *p, const IsaSite *s) {
+    if (s->kind != ISA_BEXTR || (s->width != 32 && s->width != 64) || s->mem_slot != ISA_MEM_NONE ||
+        s->dst > 15 || s->src1 > 15 || s->src2 > 15 || s->dst == 4 || s->src1 == 4 || s->src2 == 4)
+        return 0;
+    const int w = s->width == 64;
+    const uint8_t size = (uint8_t)s->width;
+    unsigned char *start = p;
+    emit_bytes(&p, (const uint8_t[]){0x50, 0x51, 0x52}, 3);                    /* push rax; push rcx; push rdx */
+    emit_reg_to(&p, s->src1, 0);                                               /* rax = src */
+    emit_reg_to(&p, s->src2, 2);                                               /* rdx = ctrl */
+    emit_bytes(&p, (const uint8_t[]){0x0f, 0xb6, 0xca, 0x83, 0xf9, size}, 6);  /* movzx ecx, dl; cmp ecx, size */
+    unsigned char *to_zero = p + 1;
+    emit_bytes(&p, (const uint8_t[]){0x73, 0x00}, 2);                          /* jae zero */
+    if (w) emit_u8(&p, 0x48);
+    emit_bytes(&p, (const uint8_t[]){0xd3, 0xe8}, 2);                          /* shr eax/rax, cl */
+    emit_bytes(&p, (const uint8_t[]){0x0f, 0xb6, 0xce, 0x83, 0xf9, size}, 6);  /* movzx ecx, dh; cmp ecx, size */
+    unsigned char *to_done1 = p + 1;
+    emit_bytes(&p, (const uint8_t[]){0x73, 0x00}, 2);                          /* jae done (no mask) */
+    emit_bytes(&p, (const uint8_t[]){0xba, 0x01, 0x00, 0x00, 0x00,             /* mov edx, 1 */
+                                     0x48, 0xd3, 0xe2, 0x48, 0xff, 0xca}, 11); /* shl rdx, cl; dec rdx */
+    if (w) emit_u8(&p, 0x48);
+    emit_bytes(&p, (const uint8_t[]){0x21, 0xd0}, 2);                          /* and eax/rax, edx/rdx */
+    unsigned char *to_done2 = p + 1;
+    emit_bytes(&p, (const uint8_t[]){0xeb, 0x00}, 2);                          /* jmp done */
+    *to_zero = (uint8_t)(p - (to_zero + 1));
+    emit_bytes(&p, (const uint8_t[]){0x31, 0xc0}, 2);                          /* zero: xor eax, eax */
+    *to_done1 = (uint8_t)(p - (to_done1 + 1));
+    *to_done2 = (uint8_t)(p - (to_done2 + 1));
+    if (w) emit_u8(&p, 0x48);
+    emit_bytes(&p, (const uint8_t[]){0x85, 0xc0}, 2);                          /* done: test eax/rax, eax/rax */
+    if (s->dst <= 2) {                                                         /* into the saved slot */
+        static const uint8_t slot[3] = {16, 8, 0};
+        emit_bytes(&p, (const uint8_t[]){0x48, 0x89, 0x44, 0x24, slot[s->dst]}, 5);
+    } else {                                                                   /* mov dst, eax/rax */
+        const uint8_t rex = (uint8_t)((w ? 0x48 : 0) | (s->dst >= 8 ? 0x41 : 0));
+        if (rex) emit_u8(&p, rex);
+        emit_bytes(&p, (const uint8_t[]){0x89, (uint8_t)(0xc0 | (s->dst & 7))}, 2);
+    }
+    emit_bytes(&p, (const uint8_t[]){0x5a, 0x59, 0x58}, 3);                    /* pop rdx; pop rcx; pop rax */
+    return (size_t)(p - start);
+}
+
 /* Writes the stub for `s` into `code` (laid out to run at `at`). Returns its size, or 0 when the
  * jmp back is out of rel32 range. */
 static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaSite *s, uint64_t *hit,
@@ -220,8 +278,10 @@ static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaS
     static const uint8_t lea_rax_rsp_up[] = {0x48, 0x8d, 0x84, 0x24, 0x00, 0x01, 0x00, 0x00}; /* lea rax,[rsp+0x100] */
     static const uint8_t lea_rsp_up[] = {0x48, 0x8d, 0xa4, 0x24, 0x00, 0x01, 0x00, 0x00};     /* lea rsp,[rsp+0x100] */
     unsigned char *p = code;
-    unsigned char inline_code[32];
-    const size_t inline_size = emit_inline_movbe_load(inline_code, s);
+    unsigned char inline_code[96];
+    size_t inline_size = emit_inline_movbe_load(inline_code, s);
+    const int low_stack = !inline_size;   /* BEXTR pushes its scratch registers: below the red zone */
+    if (!inline_size) inline_size = emit_inline_bextr(inline_code, s);
     if (inline_size) {
         /* hits[i]++ without touching flags, below the guest's red zone */
         emit_bytes(&p, lea_rsp_down, sizeof lea_rsp_down);
@@ -230,8 +290,13 @@ static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaS
         emit_bytes(&p, (const uint8_t[]){0x48, 0x8b, 0x01,                         /* mov rax, [rcx] */
                                          0x48, 0x8d, 0x40, 0x01,                   /* lea rax, [rax+1] */
                                          0x48, 0x89, 0x01, 0x59, 0x58}, 12);       /* mov [rcx], rax; pop rcx; pop rax */
-        emit_bytes(&p, lea_rsp_up, sizeof lea_rsp_up);
-        emit_bytes(&p, inline_code, inline_size);
+        if (low_stack) {
+            emit_bytes(&p, inline_code, inline_size);
+            emit_bytes(&p, lea_rsp_up, sizeof lea_rsp_up);
+        } else {
+            emit_bytes(&p, lea_rsp_up, sizeof lea_rsp_up);
+            emit_bytes(&p, inline_code, inline_size);
+        }
         const unsigned char *back = image + s->offset + s->length;
         if (s->mode == ISA_MODE_JMP_RELOCATE) {
             emit_bytes(&p, s->relocated, s->relocated_length);

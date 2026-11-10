@@ -79,13 +79,14 @@ black screen is in what is drawn, not a stopped renderer. To narrow it down:
 
 ## #101 — Stuck on the first mash QTE above 30 FPS
 
-Thanks, and thanks to @theygotti for the frame-rate observation. Button-mash QTEs are driven by
-the game's `ButtonMashNode`, which very likely assumes the original frame rate; with the 60 FPS
-patch the meter may drain faster than it fills. Workaround until it is fixed: switch the frame
-rate patch off (30 FPS) for that QTE, then back on.
+Thanks, and thanks to the commenter who pointed at the frame rate. Found it: the game's button-mash
+update multiplies every press by the frame time (as if 30 FPS were fixed), while the meter drains
+per second. With the 60 FPS patch each press counts half, with 120 FPS a quarter, so the drowning
+QTE needs two or four times faster mashing.
 
-I am looking at the mash node in the executable; I cannot reproduce that QTE with scripted input
-yet, so there is no fix to test.
+The next build adds a one-byte fix that makes every press count as at 30 FPS; it is applied
+automatically together with the frame rate patch. I could not reach that QTE with scripted input,
+so please confirm when the build is out. Until then, 30 FPS for that scene is the workaround.
 
 ---
 

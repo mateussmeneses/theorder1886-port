@@ -227,3 +227,16 @@ Loads MOVBE agora são inline (MOV + BSWAP). A/B intercalado 3+3+3: P99 de volta
   mexe no mapeamento da memória guest inteira; sem A/B seguro nesta sessão. Fica a proposta.
 - C1 (#40): a medição de 2026-11-09 já mostra o efeito do idle padrão do v0.8.0 (5,2 → 1,9
   núcleos); vira pedido de reteste (rascunho no arquivo de respostas).
+
+### 2026-11-10
+
+- **BEXTR inline (`baf6c5c`):** resultado e flags iguais ao BEXTR da CPU em 2352 casos por
+  snippet; A/B de frame time inconclusivo (máquina com carga de fundo; nativo também piorou).
+- **S1 canários (`f5a9aac`):** o log diz se o ponteiro ou a memória do `Impl` mudou antes da
+  destruição. 1º lote de boot: 32 execuções sem a falha do FSR 4; uma falha nova no código do jogo
+  (thread principal, `guest offset 0xc00ed7`, leitura de 0x1380, antes do primeiro frame). O lote
+  parou com disco cheio (cópias de perfil de 1 GB) → `--discard-profiles` no `batch_runs`.
+- **#101 encontrado e corrigido (`9f25ab0`):** `sub_b105b0` multiplica cada aperto do QTE pelo
+  tempo de frame (dt × 30) e drena o medidor por segundo; a 60 FPS cada aperto vale 0,5, a 120 FPS
+  0,25. Patch de 1 byte (jbe → jmp): aperto vale sempre 1,0, como a 30 FPS; entra junto com todo
+  patch de taxa de quadros. Não verificado em jogo (a rota com script não chega ao QTE).

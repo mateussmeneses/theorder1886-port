@@ -190,7 +190,9 @@ static int rel32_to(const unsigned char *next, const unsigned char *target, int3
  * SIB and displacement with opcode 0F 38 F0 replaced by MOV's 8B, then BSWAP of the destination.
  * Neither touches flags, and both write the 32-bit register zero-extended, as MOVBE does. The
  * hottest site in The Order runs ~900 000 times a second; the emulator call costs ~70 instructions.
- * Returns the bytes written, 0 when the site is not of that form. */
+ * Returns the bytes written, 0 when the site is not of that form.
+ * shortcut: RIP-relative and 16-bit MOVBE loads and every MOVBE store still call the emulator, inline
+ * them too if a hit report shows one hot. */
 static size_t emit_inline_movbe_load(unsigned char *p, const IsaSite *s) {
     if (s->kind != ISA_MOVBE_LOAD || (s->width != 32 && s->width != 64) || s->mem_slot != ISA_MEM_SRC ||
         (s->mem_flags & ISA_MEM_RIP_RELATIVE) || s->dst > 15)
@@ -217,11 +219,14 @@ static size_t emit_inline_movbe_load(unsigned char *p, const IsaSite *s) {
  * start = ctrl[7:0], len = ctrl[15:8]; result = start < size ? (src >> start) masked to len bits
  * (no mask when len >= size) : 0; the closing TEST sets ZF from it and clears CF and OF, the flags
  * BEXTR defines (AF, SF, PF are undefined). 32-bit forms use 32-bit operations, so the result is
- * zero-extended. Returns the bytes written, 0 when the site is not of that form. */
+ * zero-extended. Returns the bytes written, 0 when the site is not of that form.
+ * shortcut: memory-source and rsp-operand BEXTR still call the emulator, inline them if a hit report
+ * shows one hot. */
+static const uint8_t scratch_slot[3] = {16, 8, 0};   /* rax, rcx, rdx at [rsp+n] after push rax; push rcx; push rdx */
+
 static void emit_reg_to(unsigned char **p, uint8_t reg, uint8_t to /* 0 rax, 2 rdx */) {
-    static const uint8_t slot[3] = {16, 8, 0};   /* [rsp+n] after push rax; push rcx; push rdx */
     if (reg <= 2) {
-        emit_bytes(p, (const uint8_t[]){0x48, 0x8b, (uint8_t)(0x44 | (to << 3)), 0x24, slot[reg]}, 5);
+        emit_bytes(p, (const uint8_t[]){0x48, 0x8b, (uint8_t)(0x44 | (to << 3)), 0x24, scratch_slot[reg]}, 5);
     } else {
         emit_bytes(p, (const uint8_t[]){(uint8_t)(0x48 | (reg >= 8 ? 0x04 : 0)), 0x89,
                                         (uint8_t)(0xc0 | ((reg & 7) << 3) | to)}, 3);   /* mov r(to), r(reg) */
@@ -259,8 +264,7 @@ static size_t emit_inline_bextr(unsigned char *p, const IsaSite *s) {
     if (w) emit_u8(&p, 0x48);
     emit_bytes(&p, (const uint8_t[]){0x85, 0xc0}, 2);                          /* done: test eax/rax, eax/rax */
     if (s->dst <= 2) {                                                         /* into the saved slot */
-        static const uint8_t slot[3] = {16, 8, 0};
-        emit_bytes(&p, (const uint8_t[]){0x48, 0x89, 0x44, 0x24, slot[s->dst]}, 5);
+        emit_bytes(&p, (const uint8_t[]){0x48, 0x89, 0x44, 0x24, scratch_slot[s->dst]}, 5);
     } else {                                                                   /* mov dst, eax/rax */
         const uint8_t rex = (uint8_t)((w ? 0x48 : 0) | (s->dst >= 8 ? 0x41 : 0));
         if (rex) emit_u8(&p, rex);
@@ -280,8 +284,8 @@ static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaS
     unsigned char *p = code;
     unsigned char inline_code[96];
     size_t inline_size = emit_inline_movbe_load(inline_code, s);
-    const int low_stack = !inline_size;   /* BEXTR pushes its scratch registers: below the red zone */
-    if (!inline_size) inline_size = emit_inline_bextr(inline_code, s);
+    int pushes_scratch = 0;   /* BEXTR pushes rax/rcx/rdx: it runs while rsp is below the red zone */
+    if (!inline_size && (inline_size = emit_inline_bextr(inline_code, s)) != 0) pushes_scratch = 1;
     if (inline_size) {
         /* hits[i]++ without touching flags, below the guest's red zone */
         emit_bytes(&p, lea_rsp_down, sizeof lea_rsp_down);
@@ -290,7 +294,7 @@ static size_t emit_stub(unsigned char *code, const unsigned char *at, const IsaS
         emit_bytes(&p, (const uint8_t[]){0x48, 0x8b, 0x01,                         /* mov rax, [rcx] */
                                          0x48, 0x8d, 0x40, 0x01,                   /* lea rax, [rax+1] */
                                          0x48, 0x89, 0x01, 0x59, 0x58}, 12);       /* mov [rcx], rax; pop rcx; pop rax */
-        if (low_stack) {
+        if (pushes_scratch) {
             emit_bytes(&p, inline_code, inline_size);
             emit_bytes(&p, lea_rsp_up, sizeof lea_rsp_up);
         } else {
@@ -364,7 +368,8 @@ IsaReport isa_rewrite_apply(IsaTable *t, unsigned char *image, unsigned char *st
     isa_emulate_set_image(image);
     for (uint32_t i = 0; i < t->count; i++) {
         const IsaSite *s = &t->sites[i];
-        /* XMM sites are emulated by the Windows int3 handler only (probe.c, the trapped CONTEXT). */
+        /* shortcut: XMM sites are emulated by the Windows int3 handler only (the trapped CONTEXT); a
+         * Linux Sandy Bridge host still stops, add a ucontext XMM path if one is reported. */
         int handled = s->mode != ISA_MODE_UNSUPPORTED;
 #ifndef _WIN32
         handled &= !is_vector_kind(s->kind);

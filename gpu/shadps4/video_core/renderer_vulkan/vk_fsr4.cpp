@@ -57,6 +57,7 @@ FfxFsr4ModelPreset ModelPreset(int preset) {
 // and destroyed at the first upscaler switch read a null scheduler, so its memory (or the pointer
 // to it) had changed. The canaries and Fsr4Upscaler::expected tell which, logged before the
 // destruction goes on as before.
+// shortcut: diagnostic only, remove the canaries and `expected` once S1's cause is fixed.
 constexpr u64 Fsr4Canary = 0x46535234494d504cull; // "FSR4IMPL"
 
 struct Fsr4Upscaler::Impl {

@@ -60,10 +60,20 @@ class GraphicsOptionsTest(unittest.TestCase):
         options = g.startup_options({'aspect_ratio': '16:9', 'engine_fps': '120'})
         # The XML's "60 FPS" patch: the game runs at half the engine rate.
         self.assertEqual(g.patch_names(launcher, options),
-                         ['Skip Intro Logos', 'Aspect Ratio - 16:9', 'Frame Rate Patch - 60 FPS'])
+                         ['Skip Intro Logos', 'Aspect Ratio - 16:9', 'Frame Rate Patch - 60 FPS',
+                          'QTE Fix - Button Mash at Any Frame Rate'])
         original = g.startup_options({'engine_fps': '60'})
         self.assertEqual(g.patch_names(['Aspect Ratio - 21:9', 'Skip Intro Logos'], original),
                          ['Skip Intro Logos'])
+
+    def test_qte_fix_follows_the_frame_rate_patch(self):
+        # #101: the fix exists in the XML and joins only a selection with a frame rate patch.
+        from patches import available_patches
+        patch_file = paths.ROOT / 'patches/TheOrder1886-Orbis.xml'
+        self.assertIn(g.QTE_FIX, available_patches(patch_file, '01.02'))
+        names = g.patch_names(['QTE Fix - Button Mash at Any Frame Rate'], g.startup_options({'engine_fps': '240'}))
+        self.assertEqual(names.count(g.QTE_FIX), 1)
+        self.assertNotIn(g.QTE_FIX, g.patch_names([], g.startup_options({'engine_fps': '60'})))
 
     def test_ultrawide_startup_selects_the_existing_patch(self):
         from patches import selected_patches

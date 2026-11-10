@@ -166,5 +166,17 @@
             <Line Type="bytes" Address="0x004507c4" Value="01" Pattern="C7 05 ?? ?? ?? ?? 02 00 00 00 49 8B 07 48 3B 45 E0" At="6"/>
         </PatchList>
     </Metadata>
+    <Metadata Title="The Order 1886"
+              Name="QTE Fix - Button Mash at Any Frame Rate"
+              Note="Button-mash QTEs (drowning the guard in the prologue, #101) scale each press by the frame time (dt x 30), so at 60 FPS a press counts half and at 120 FPS a quarter while the meter drains per second: they could not be finished above 30 FPS. The press always counts 1.0, its value at 30 FPS (sub_b105b0: jbe -> jmp over the dt scaling). Added with every frame rate patch (scripts/graphics_options.py)."
+              Author="theorder1886-port"
+              PatchVer="1.0"
+              AppVer="01.02"
+              AppElf="eboot.bin"
+              isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x00b106e7" Value="eb" Pattern="c5 fa 10 0d ?? ?? ?? ?? 76 08 c5 fa 59 0d ?? ?? ?? ?? c5 fa 11 4d" At="8"/>
+        </PatchList>
+    </Metadata>
 
 </Patch>

@@ -17,6 +17,8 @@ DEFAULTS = {'aspect_ratio': 'original', 'engine_fps': '120', 'deferred_readback'
             'stale_readback': '1', 'async_shaders': '1'}
 ASPECT_PREFIX = 'Aspect Ratio'
 FPS_PREFIX = 'Frame Rate Patch'
+# Button-mash QTEs scale each press by the frame time: above 30 FPS they cannot be finished (#101).
+QTE_FIX = 'QTE Fix - Button Mash at Any Frame Rate'
 HEADER = '# port settings (in-game menu: Insert / R3+L2)'
 # God of War III port keys older versions wrote (plus cheat_*); the writers drop them.
 LEFTOVER_KEYS = ('red_orb_multiplier', 'green_orb_multiplier', 'blue_orb_multiplier', 'gold_orb_multiplier',
@@ -111,6 +113,8 @@ def patch_names(names, options):
     # A frame rate patch is named after the game's rate: half the engine's ("60 FPS" at 120).
     if options['engine_fps'] != '60':
         names.append(f'{FPS_PREFIX} - {int(options["engine_fps"]) // 2} FPS')
+        if QTE_FIX not in names:
+            names.append(QTE_FIX)
     return names
 
 

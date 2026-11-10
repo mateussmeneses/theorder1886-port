@@ -363,6 +363,10 @@ def main():
     parser.add_argument('--affinity', default='',
                         help='Windows: CPU affinity mask for the game process tree, e.g. 0x5500 '
                              '(opt-in; the runner itself is not restricted)')
+    parser.add_argument('--discard-profiles', action='store_true',
+                        help='delete each run profile under --profile-root after the run (logs, frame '
+                             'traces and manifests stay): a ~1 GB warm-cache copy per run fills the disk '
+                             'in long batches')
     parser.add_argument('--kill-existing', action='store_true',
                         help='legacy opt-in: kill every theorder-probe.exe before the batch')
     args = parser.parse_args()
@@ -624,6 +628,9 @@ def main():
                 'frame_trace_error': frame_trace_error,
             }
             manifest['runs'].append(record)
+            if args.discard_profiles and run_profile:
+                shutil.rmtree(run_profile, ignore_errors=True)
+                record['profile_discarded'] = True
     print('summary:')
     for label, rs in results.items():
         failed = sum(1 for r in rs if r['fault'] or r['cause'] or r['hung'])

@@ -254,3 +254,15 @@ Relatos do usuário no teste (feito no pacote v0.8.0, cache frio) e o que já se
 | R1 | "Write windows" (UFC-69/PORTHEON): cópias da libc perto de dados GPU sem readback | Estudo de porte; ataca os 90 % de downloads com escritor no frame aberto. | A/B de ms/s de download e frame time |
 | R2 | Backport shadPS4 #5264 (EarlyFragmentTests + DEPTH_BEFORE_SHADER) | Avaliar contra o flicker F1. | A/B visual |
 | T1 | Ferramenta de captura grava `rgba` quando os dados são `bgra` (cores azuladas nas prévias) | Corrigir o rótulo no dump do build atual. | Prévia com cores corretas sem `--raw-format` |
+
+### 2026-11-10 (após a v0.8.1) — F4 legendas, primeiro passo
+
+- Rastreamento com os hooks do WIP do usuário (`THEORDER_TRACE_SUBTITLES=1`) na cutscene do save,
+  em inglês: legendas ligadas (`sub_enabled=1`, `SetShowSubtitles val=1`), 14 falas iniciadas,
+  19 textos emitidos ("Kill 'em!", …) e 19 `CreateSubtitle(iggy, 0, text)` chamados na UI Iggy.
+  **A cadeia do jogo funciona até a UI; a legenda não é desenhada.** O texto do HUD (objetivo)
+  aparece, então a falha é da camada/elemento de legenda na Iggy. Próximo: captura completa de
+  um frame com legenda ativa e investigação do `CreateSubtitle` dentro da Iggy.
+- Defeito achado no caminho (`b21abad`): o fallback PT-BR → PT-PT nunca disparava (comparava o
+  caminho do XML com o ID do título), então português nas SKUs sem PT-BR recebia o idioma 17.
+- Ferramenta: as prévias das capturas do build atual saem com R e B trocados (T1).

@@ -52,6 +52,18 @@ the reporter's retest.
 
 ## Known open items
 
+Reported on the v0.8.0 build during this release's testing and not fixed here:
+
+- **Flickering objects and decals** (for example a wall poster that appears every other
+  frame in Whitechapel). Present since at least v0.7.9; cause not found yet. A first
+  measurement pointed at `stale_readback`, but a 3 + 3 repeat did not confirm it.
+- **Stutters on first visits.** A fresh install compiles pipelines while you play
+  (1374 compiled in one session); a second visit is smoother. New material-shader
+  variants keep appearing each session (#113).
+- **Grenade smoke missing.** Not reproduced yet.
+- **Subtitles do not show** in cutscenes with dialogue.
+- #117 (crash at `theorder-probe.exe+0x126ce4`) is the WaitGraphics crash fixed above.
+
 - Rare boot faults on this test PC: FSR 4 context teardown at the first frame (2 in 50
   runs) and an NVIDIA driver fault in the presenter (1 in 50); one new guest fault seen
   once (`0xc00ed7`).

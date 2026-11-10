@@ -55,3 +55,9 @@ after that test, with the P1/P2 items stated in the release notes.
   precompilation step not implemented; S4/C1 not run.
 
 Gates after the fixes: `isa-stub-test` ok, `bash tools/run_tests.sh` PASS (57 native + Python).
+
+## After the review
+
+`c061ceb` (diagnostics `THEORDER_SNORM2101010=unorm`, `THEORDER_FILE_FALLBACK_TRACE=1`): both
+inactive unless set; full gate PASS before packaging. Release notes gained the known open items
+reported on 2026-11-10 (flicker, first-visit stutter, grenade smoke, subtitles).

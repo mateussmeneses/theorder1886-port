@@ -47,12 +47,14 @@ tick instead of `Finish()` (measure tick gap first).
 
 ## Next exact actions
 
-Branch `auto/backlog-20261109` (worktree `../theorder1886-port-wg`) holds this session's commits;
-`master` was not fast-forwarded because the main checkout's uncommitted `src/probe.c` (subtitle
-WIP) overlaps files these commits change. Review, then merge or cherry-pick.
+Branch `auto/backlog-20261109` (worktree `../theorder1886-port-wg`) holds the session's commits;
+`master` was not fast-forwarded (the main checkout's uncommitted `src/probe.c` subtitle WIP
+overlaps). Review, then merge or cherry-pick. Progress: `docs/plans/2026-11-09-autonomous-backlog.md`.
 
-1. Decide on publishing: reply drafts in `docs/ISSUE_REPLY_DRAFTS_2026-11-09.md` (nothing posted).
-2. #65: ask a 2nd/3rd generation Intel user to test a build of this branch.
-3. Open items with a next step written down: boot faults S1/S2 (plan), BEXTR inline
-   (`docs/OLD_CPU_ISA_PATH.md`), material-permutation reduction (`docs/PIPELINE_SESSION_REBUILDS.md`),
-   #101 mash QTE (diary).
+1. Publishing decisions: reply drafts in `docs/ISSUE_REPLY_DRAFTS_2026-11-09.md` (nothing posted).
+2. Ask reporters to test a build of this branch: #65 (2nd/3rd gen Intel), #101 (mash QTE at 60/120 FPS).
+3. Boot faults: rerun `tools/batch_runs.py --runs 60 --secs 20 --discard-profiles` (FSR 4 canaries
+   now log what changed); the round of 2026-11-10 was stopped by low system memory after 36 runs
+   with no FSR 4 fault and one new guest fault (`0xc00ed7`, null + 0x1380, main thread, boot).
+4. BEXTR inline frame-time gain: repeat the 3 + 3 A/B on a quiet host.
+5. Material-permutation reduction (`docs/PIPELINE_SESSION_REBUILDS.md`).

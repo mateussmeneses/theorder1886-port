@@ -424,6 +424,11 @@ target_link_libraries(blend-rewrite-test PRIVATE Vulkan::Headers fmt::fmt Boost:
 if(NOT WIN32)
     set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
 endif()
+add_executable(serdes-damaged-test EXCLUDE_FROM_ALL ../tests/test_serdes_damaged.cpp)
+target_compile_options(serdes-damaged-test PRIVATE -UNDEBUG)
+target_include_directories(serdes-damaged-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(serdes-damaged-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+
 add_executable(htile-expand-test EXCLUDE_FROM_ALL ../tests/test_htile_expand.cpp)
 target_compile_options(htile-expand-test PRIVATE -UNDEBUG)
 target_include_directories(htile-expand-test PRIVATE shim shadps4 third_party/gcn/include)

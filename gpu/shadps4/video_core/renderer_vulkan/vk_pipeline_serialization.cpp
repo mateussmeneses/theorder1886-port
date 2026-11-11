@@ -802,9 +802,32 @@ u64 RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx) 
     return hash;
 }
 
+static bool LoadShaderMetaUnchecked(Serialization::Archive& ar, Shader::Info& info,
+                                    Shader::StageSpecialization& spec, size_t& perm_idx,
+                                    u64& spv_hash, bool needs_ssbo_barriers);
+
+// A truncated or damaged meta blob (disk full, interrupted write) throws while it is read; the
+// stage is then treated as missing and translated on first use instead of ending the game.
+// Every caller passes a freshly constructed info/spec, so a half-read one is simply discarded.
+// Idea from TOport (IgorAugustoHH/The-Order-1886-PC-Port 154a2e6).
 bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
                     Shader::StageSpecialization& spec, size_t& perm_idx, u64& spv_hash,
                     bool needs_ssbo_barriers) {
+    try {
+        return LoadShaderMetaUnchecked(ar, info, spec, perm_idx, spv_hash, needs_ssbo_barriers);
+    } catch (const std::exception& e) {
+        static std::atomic<u32> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+            std::printf("Shader cache: damaged meta for %016llx skipped (%s)\n",
+                        static_cast<unsigned long long>(info.pgm_hash), e.what());
+        }
+        return false;
+    }
+}
+
+static bool LoadShaderMetaUnchecked(Serialization::Archive& ar, Shader::Info& info,
+                                    Shader::StageSpecialization& spec, size_t& perm_idx,
+                                    u64& spv_hash, bool needs_ssbo_barriers) {
     Serialization::Reader meta{ar};
 
     u32 meta_version{};

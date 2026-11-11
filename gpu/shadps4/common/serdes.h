@@ -8,10 +8,17 @@
 
 #include <cstddef>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace Serialization {
+
+/// A read past the end of the archive (a truncated or damaged cache blob). Thrown instead of
+/// aborting so a cache loader can treat the entry as missing and translate it again.
+struct DeserializeError : std::runtime_error {
+    DeserializeError() : std::runtime_error{"Invalid or corrupted deserialization container/shader cache"} {}
+};
 
 template <typename T>
 concept Container = requires(T t) {
@@ -107,8 +114,9 @@ struct Writer {
 struct Reader {
     template <typename T>
     void Read(T* ptr, size_t size) {
-        ASSERT_MSG(ar.offset + size <= ar.container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        if (size > ar.container.size() - ar.offset) {
+            throw DeserializeError{};
+        }
         std::memcpy(reinterpret_cast<void*>(ptr), ar.CurrPtr(), size);
         ar.Advance(size);
     }
@@ -123,7 +131,12 @@ struct Reader {
     void Read(auto& v) {
         size_t num_elements{};
         Read(num_elements);
-        for (int i = 0; i < num_elements; ++i) {
+        // Every stored element takes at least one byte: a larger count is a damaged blob, not a
+        // reason to grow the vector until memory runs out.
+        if (num_elements > ar.container.size() - ar.offset) {
+            throw DeserializeError{};
+        }
+        for (size_t i = 0; i < num_elements; ++i) {
             v.emplace_back();
             Read(v.back());
         }

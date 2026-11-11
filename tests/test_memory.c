@@ -40,9 +40,41 @@ static void flexible_split_keeps_each_half(void) {
     CHECK(release_flexible(m, 2 * PAGE) == 0);
 }
 
-int main(void) {
+/* Released pages read as zero when they are handed out again (the game relies on it). */
+static void released_pages_read_zero(void) {
+    for (int round = 0; round < 4; ++round) {
+        void *p = NULL;
+        CHECK(map_flexible(&p, 8 * PAGE, 3, 0) == 0 && p);
+        unsigned char *m = p;
+        size_t nonzero = 0;
+        for (size_t i = 0; i < 8 * PAGE; ++i) nonzero += m[i] != 0;
+        CHECK(nonzero == 0);
+        memset(m, 0xA5, 8 * PAGE);
+        CHECK(release_flexible(m, 8 * PAGE) == 0);
+    }
+}
+
+int main(int argc, char **argv) {
+    const int on_map = argc > 1 && !strcmp(argv[1], "--on-map");
+    if (on_map) {
+#ifdef _WIN32
+        _putenv("THEORDER_GUEST_COMMIT_ON_MAP=1");
+#else
+        setenv("THEORDER_GUEST_COMMIT_ON_MAP", "1", 1);
+#endif
+    }
     flexible_split_keeps_each_half();
+    released_pages_read_zero();
     if (failures) { fprintf(stderr, "%d failure(s)\n", failures); return 1; }
-    puts("PASS: flexible split keeps each half's pages");
-    return 0;
+    printf("PASS: flexible split keeps each half's pages; released pages read zero (%s)\n",
+           on_map ? "pool committed as mapped" : "pool committed at once");
+    if (on_map) return 0;
+    /* The same contracts with the commit-on-map pool (the error 1450 fallback). */
+    char command[1024];
+#ifdef _WIN32
+    snprintf(command, sizeof(command), "\"\"%s\" --on-map\"", argv[0]);
+#else
+    snprintf(command, sizeof(command), "\"%s\" --on-map", argv[0]);
+#endif
+    return system(command) != 0;
 }

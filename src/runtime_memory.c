@@ -294,35 +294,15 @@ static int host_protect(uintptr_t address, uint64_t size, int prot) {
     }
     return 0;
 }
-/* Released pages read as zero when reused, like the memfd's punched holes.
- * On Windows, using memset forces physical RAM allocation (working set ballooning).
- * DiscardVirtualMemory / MEM_RESET releases physical frames back to the OS. */
+/* Whole-pool commit: released pages must read as zero when reused, like the memfd's punched
+ * holes (the game allocates direct memory again and relies on it). DiscardVirtualMemory and
+ * MEM_RESET only make the contents undefined: pages Windows has not trimmed yet kept the old
+ * data, so a reused allocation could read stale command or constant data. Zero them (as
+ * SpartanPort does); this keeps the pages resident until Windows trims them, which costs
+ * working set but not commit (the section is committed at once in this mode). */
 static void host_discard_frames(uint64_t phys, uint64_t size) {
     if (!backing_base || !size) return;
-    typedef DWORD (WINAPI *pfnDiscardVirtualMemory)(PVOID, SIZE_T);
-    static pfnDiscardVirtualMemory pDiscard = NULL;
-    static int initialized = 0;
-    if (!initialized) {
-        HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-        if (hKernel) pDiscard = (pfnDiscardVirtualMemory)GetProcAddress(hKernel, "DiscardVirtualMemory");
-        initialized = 1;
-    }
-    uintptr_t start = (uintptr_t)(backing_base + phys);
-    uintptr_t aligned_start = (start + 4095ULL) & ~4095ULL;
-    uintptr_t end = start + size;
-    uintptr_t aligned_end = end & ~4095ULL;
-    if (aligned_end > aligned_start) {
-        SIZE_T page_bytes = (SIZE_T)(aligned_end - aligned_start);
-        if (!pDiscard || pDiscard((PVOID)aligned_start, page_bytes) != ERROR_SUCCESS) {
-            VirtualAlloc((PVOID)aligned_start, page_bytes, MEM_RESET, PAGE_READWRITE);
-        }
-    }
-    if (aligned_start > start) {
-        memset((void*)start, 0, (size_t)(aligned_start - start));
-    }
-    if (end > aligned_end && aligned_end >= start) {
-        memset((void*)aligned_end, 0, (size_t)(end - aligned_end));
-    }
+    memset(backing_base+phys,0,size);
 }
 /* Released pages read as zero when reused, like the memfd's punched holes. With commit-on-map,
  * pages never committed are zero-filled when first committed: only committed ones are cleared,

@@ -19,6 +19,8 @@ namespace Serialization {
 struct DeserializeError : std::runtime_error {
     DeserializeError() : std::runtime_error{"Invalid or corrupted deserialization container/shader cache"} {}
 };
+/// SpartanPort's name for the same error (its cache loaders catch CorruptData).
+using CorruptData = DeserializeError;
 
 template <typename T>
 concept Container = requires(T t) {
@@ -50,9 +52,15 @@ struct Archive {
         return container.data() + offset;
     }
 
+    // port: check against remaining bytes without overflowing offset + size.
+    [[nodiscard]] size_t Remaining() const {
+        return container.size() - offset;
+    }
+
     void Advance(size_t size) {
-        ASSERT_MSG(offset + size <= container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        if (size > Remaining()) {
+            throw CorruptData{};
+        }
         offset += size;
     }
 
@@ -145,6 +153,10 @@ struct Reader {
     void Read(std::string& s) {
         size_t length{};
         Read(length);
+        // port: reject corrupt string lengths before resizing the destination.
+        if (length > ar.Remaining()) {
+            throw CorruptData{};
+        }
         s.resize(length);
         Read(s.data(), length);
     }

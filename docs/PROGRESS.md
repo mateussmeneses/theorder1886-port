@@ -2,6 +2,18 @@
 
 Short, dated state for resuming work. Newest first.
 
+## 2026-11-11: reference ports, v0.8.2 and v0.8.3, process
+
+- Compared with TOport and the DivinusX package (`docs/plans/2026-11-11-reference-ports-review.md`),
+  both ports run side by side on the same route.
+- v0.8.2: Portuguese boots in English where the dump lacks the language package (it stayed
+  black); damaged shader cache skipped; RAM guard; SRT walker push/pop fix.
+- v0.8.3 (#113): the particle SRT normalization never applied (one buffer fewer than TOport's
+  layout). Now applied: >100 ms windows 15/7/7 -> 3/1/1 over three sessions, no driver pipeline
+  builds after the first (n=1 per build).
+- Process: PR-only `master` with the required `gate` check, issue lifecycle labels and workflow,
+  `tools/release.sh` and `tools/smoke_package.py`, `docs/STATUS.md`, plans archived.
+
 ## 2026-11-09 (evening): autonomous backlog session
 
 Plan and diary: `docs/plans/2026-11-09-autonomous-backlog.md`; branch `auto/backlog-20261109`.

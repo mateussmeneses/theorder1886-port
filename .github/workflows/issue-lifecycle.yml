@@ -1,0 +1,45 @@
+name: Issue lifecycle
+
+# needs:log issues without a reply are reminded after 14 days and closed 7 days later (a reply
+# removes the stale mark). needs-retest issues get the same clock, so a shipped fix that nobody
+# retests does not stay open forever; reopening is one click.
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          only-issue-labels: 'needs:log'
+          days-before-issue-stale: 14
+          days-before-issue-close: 7
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 'stale'
+          stale-issue-message: >
+            This issue still needs `user/last_run.log` (or the bug-report .zip from the launcher)
+            from the latest release. Without it we cannot trace the problem; it will be closed in
+            7 days and can be reopened any time with the log.
+          close-issue-message: Closed for lack of a log; reopen with `user/last_run.log` from the latest release.
+          close-issue-reason: not_planned
+      - uses: actions/stale@v9
+        with:
+          only-issue-labels: 'status:needs-retest'
+          days-before-issue-stale: 21
+          days-before-issue-close: 7
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          stale-issue-label: 'stale'
+          stale-issue-message: >
+            A fix for this shipped in a release named above. If the problem is gone or still
+            there, please say so (with `user/last_run.log` if it is still there); otherwise this
+            closes in 7 days.
+          close-issue-message: Closed after the fix shipped without a retest; reopen if it still happens.
+          close-issue-reason: completed

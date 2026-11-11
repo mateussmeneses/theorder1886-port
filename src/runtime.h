@@ -15,7 +15,7 @@ typedef port_jmp_buf sigjmp_buf;
 extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
-/* SPARTAN_SLOW_WAITS=<ms>: log guest blocking calls (locks, waits, reads) longer than that.
+/* THEORDER_SLOW_WAITS=<ms>: log guest blocking calls (locks, waits, reads) longer than that.
  * runtime_wait_begin() returns 0 when it is off; runtime_wait_end() then does nothing. */
 uint64_t runtime_wait_begin(void);
 void runtime_wait_end(const char *what,uint64_t start,const char *detail,long long arg);

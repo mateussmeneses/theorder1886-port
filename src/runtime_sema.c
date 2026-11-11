@@ -30,10 +30,10 @@ static size_t created, deleted, acquired, signaled, timed_out;
 /* A found semaphore moves to the front. New ones went in front, so the ones made at boot
  * sat behind every one made since, each wait and signal walking past them under the one lock
  * (from Awakenchan 0.9.34 beta 9.9). Not for the diagnostic snapshot, which leaves the order
- * alone. SPARTAN_SEMA_FRONT=0: the list keeps its order, as before. */
+ * alone. THEORDER_SEMA_FRONT=0: the list keeps its order, as before. */
 static Sema *find_ordered(uint32_t id,int reorder) {
     static int front=-1;
-    if (front<0) { const char *e=getenv("SPARTAN_SEMA_FRONT"); front=!(e && e[0]=='0'); }
+    if (front<0) { const char *e=getenv("THEORDER_SEMA_FRONT"); front=!(e && e[0]=='0'); }
     Sema **link=&registry;
     for (Sema *s=registry;s;link=&s->next,s=s->next) {
         if (s->id!=id) continue;

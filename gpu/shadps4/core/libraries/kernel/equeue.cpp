@@ -458,7 +458,7 @@ int PS4_SYSV_ABI sceKernelDeleteEqueue(OrbisKernelEqueue eq) {
     return ORBIS_OK;
 }
 
-// spartanport: SPARTAN_SLOW_WAITS=<ms> logs guest waits longer than that (src/runtime_thread.c).
+// port: THEORDER_SLOW_WAITS=<ms> logs guest waits longer than that (src/runtime_thread.c).
 extern "C" uint64_t runtime_wait_begin(void);
 extern "C" void runtime_wait_end(const char* what, uint64_t start, const char* detail,
                                  long long arg);
@@ -484,7 +484,7 @@ int PS4_SYSV_ABI sceKernelWaitEqueue(OrbisKernelEqueue eq, OrbisKernelEvent* ev,
         return ORBIS_KERNEL_ERROR_EINVAL;
     }
 
-    const u64 wait_start = runtime_wait_begin(); // spartanport: slow-wait log, 0 when off
+    const u64 wait_start = runtime_wait_begin(); // port: slow-wait log, 0 when off
     *out = equeue->WaitForEvents(ev, num, timo);
     if (wait_start) {
         runtime_wait_end("equeue wait", wait_start, std::string(equeue->GetName()).c_str(), *out);

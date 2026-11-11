@@ -61,7 +61,7 @@ static _Thread_local GuestThread *current;
 
 static int slow_wait_ms(void) {
     static int threshold_ms=-1;
-    if (threshold_ms<0) { const char *e=getenv("SPARTAN_SLOW_WAITS"); threshold_ms=e ? atoi(e) : 0; }
+    if (threshold_ms<0) { const char *e=getenv("THEORDER_SLOW_WAITS"); threshold_ms=e ? atoi(e) : 0; }
     return threshold_ms;
 }
 uint64_t runtime_wait_begin(void) {
@@ -164,11 +164,11 @@ void runtime_thread_attach_main(void) {
 }
 /* Records are never removed (games create threads again during every load), so a found
  * thread moves to the front: the threads the game asks about (priorities, affinity) are not
- * behind every finished one (from Awakenchan 0.9.34 beta 9.9). SPARTAN_THREAD_FRONT=0: the list
+ * behind every finished one (from Awakenchan 0.9.34 beta 9.9). THEORDER_THREAD_FRONT=0: the list
  * keeps its order, as before. */
 static GuestThread *find_thread(void *handle) {
     static int front=-1;
-    if (front<0) { const char *e=getenv("SPARTAN_THREAD_FRONT"); front=!(e && e[0]=='0'); }
+    if (front<0) { const char *e=getenv("THEORDER_THREAD_FRONT"); front=!(e && e[0]=='0'); }
     GuestThread *found=NULL;
     pthread_mutex_lock(&lock);
     GuestThread **link=&threads;

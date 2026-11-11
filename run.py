@@ -551,6 +551,10 @@ def main():
                    '--patches', str(out / 'patches.bin'), '--app0', str(game),
                    '--user', str(user_dir),
                    '--timeout', timeout_val, *isa_args, *guest_lang_args, *args]
+        # The game's window may take the foreground from the launcher that started it (otherwise
+        # Windows can open it behind the launcher). SpartanPort 6f43d65 (Samue1Fontes, #1020).
+        if WINDOWS:
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
         return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
     finally:

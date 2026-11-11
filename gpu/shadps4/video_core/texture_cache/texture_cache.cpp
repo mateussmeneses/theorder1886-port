@@ -934,6 +934,8 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         // screen-effect pass reading a 1920x1080 target with integer coordinates) shares the same
         // pitch and tile mode: reuse the full-height cached image through a format-compatible
         // view instead of treating the height difference as pool reuse and allocating a new image.
+        // - The request's width can be the pitch: at 3440x1440 the reads are 3456 wide (pitch
+        //   3456) against a 3440-wide frame buffer; the extra columns are padding.
         const auto& a = image_info;
         const auto& b = cache_image.info;
         const auto is_integer = [](vk::Format format) {
@@ -975,7 +977,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
             (binding == BindingType::Texture || binding == BindingType::Storage) && native_reads &&
             a.pixel_format != b.pixel_format && is_integer(a.pixel_format) &&
             lhs_block_size == rhs_block_size && a.pitch == b.pitch && a.tile_mode == b.tile_mode &&
-            a.type == b.type && a.size.width <= b.size.width && a.size.height < b.size.height &&
+            a.type == b.type && a.size.width <= b.pitch && a.size.height < b.size.height &&
             a.size.depth == 1 && b.size.depth == 1 && a.resources.levels == 1 &&
             a.resources.layers == 1 && b.resources.levels == 1 && b.resources.layers == 1 &&
             !a.props.is_block && !b.props.is_block && !a.props.is_depth && !b.props.is_depth &&

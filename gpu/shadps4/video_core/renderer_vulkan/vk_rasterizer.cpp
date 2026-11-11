@@ -43,6 +43,8 @@
 #include "video_core/texture_cache/image_view.h"
 #include "video_core/texture_cache/texture_cache.h"
 
+#include <vulkan/vulkan_format_traits.hpp>
+
 namespace Vulkan {
 
 static Shader::PushData MakeUserData(const AmdGpu::Regs& regs) {
@@ -2659,10 +2661,20 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
         return false;
     }
 
-    // Image clear must be valid
+    // Image clear must be valid and number of component must match
+    // port: a cached image of another format with the same size (R32 where the game now
+    // writes RGBA8) must not take a clear made for the buffer's format.
     VideoCore::Image& image1 = texture_cache.GetImage(image1_id);
     if (image1.info.guest_size != buf1.GetSize() || image1.info.num_bits != buf1_bpp ||
-        image1.info.props.is_depth) {
+        image1.info.props.is_depth ||
+        AmdGpu::NumComponents(buf1.GetDataFmt()) != vk::componentCount(image1.info.pixel_format)) {
+        return false;
+    }
+    // port: the component count alone lets RGBA8 over RGB10A2, or UNORM over sRGB, through.
+    // Take the shortcut only when the buffer's format is exactly the image's format (godlyfast).
+    const vk::Format buffer_format =
+        LiverpoolToVK::TrySurfaceFormat(buf1.GetDataFmt(), buf1.GetNumberFmt());
+    if (buffer_format == vk::Format::eUndefined || buffer_format != image1.info.pixel_format) {
         return false;
     }
 
@@ -2933,6 +2945,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
     std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
     bool set_ok = set_slot != nullptr;
+    // port: the generation the first binding resolved under. A later binding's FindImage
+    // may (un)register images, which can change an earlier binding's answer; stamping the set
+    // with the generation after that kept replaying the earlier answer (the found_id memo already
+    // records only when the generation did not move).
+    const u64 set_generation = texture_cache.RegistryGeneration();
     // SampleSceneProxies: bindings that may read a reduced scene proxy instead of the native
     // image (normalized sampling only; see Shader::ImageResource::needs_native).
     boost::container::small_vector<bool, 16> binding_proxy_ok;
@@ -3025,11 +3042,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
-        // Same as image_desc.NumBindings(stage), without fetching the T# again.
+        // Same as image_desc.NumBindings(stage), without fetching the T# again. The last level is
+        // clamped to the levels the image has (NumLevels clamps a T# declaring more than its
+        // extent's mip chain): one view per existing level, never past the end.
+        const u32 fallback_last =
+            std::min<u32>(static_cast<u32>(tsharp.last_level), tsharp.NumLevels() - 1);
         const u32 num_bindings =
             (mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex &&
-             tsharp.last_level >= tsharp.base_level)
-                ? static_cast<u32>(tsharp.last_level - tsharp.base_level + 1)
+             fallback_last >= tsharp.base_level)
+                ? fallback_last - static_cast<u32>(tsharp.base_level) + 1
                 : 1u;
         const bool proxy_candidate = sample_proxies && num_bindings == 1 &&
                                      !image_desc.needs_native && !image_desc.is_written &&
@@ -3228,9 +3249,10 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
             }
         }
     }
-    if (set_ok && image_bindings.size() == stage.images.size()) {
+    if (set_ok && image_bindings.size() == stage.images.size() &&
+        texture_cache.RegistryGeneration() == set_generation) {
         // Remember the set: the same T#s resolve the same way while no image is (un)registered.
-        set_slot->generation = texture_cache.RegistryGeneration();
+        set_slot->generation = set_generation;
         set_slot->scene_generation = scene_targets->Generation();
         set_slot->count = static_cast<u32>(stage.images.size());
         std::copy_n(resolved.begin(), set_slot->count, set_slot->entries.begin());

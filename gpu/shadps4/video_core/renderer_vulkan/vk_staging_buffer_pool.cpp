@@ -42,6 +42,10 @@ StagingBufferPool::StagingBufferPool(const Instance& instance_, Scheduler& sched
     : instance{instance_}, scheduler{scheduler_} {
     const char* env = std::getenv("THEORDER_STAGING_KEEP_MB");
     keep_blocks = (env ? std::strtoull(env, nullptr, 10) : 128) * 1_MB / BLOCK_SIZE;
+    // port (SpartanPort 812190a): the VRAM ring (scratch for detiling and copies) keeps far less:
+    // blocks added for a burst of uploads at an area load stayed in VRAM for good.
+    const char* vram_env = std::getenv("THEORDER_STAGING_KEEP_VRAM_MB");
+    keep_vram_blocks = (vram_env ? std::strtoull(vram_env, nullptr, 10) : 32) * 1_MB / BLOCK_SIZE;
     Ring& ring = rings[u32(MemoryType::HostUncached)];
     for (u64 i = 0; i < PREWARM_BLOCKS; ++i) {
         auto& block = ring.blocks.emplace_back(Block{
@@ -70,8 +74,12 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
                                                     MemoryType type, bool unsynchronized) {
     Block* best{};
     u64 best_offset{};
+    // port (SpartanPort 812190a): the VRAM ring fills its first blocks first, so the ones a burst
+    // of uploads added fall idle and are trimmed; going round from the current block kept them all
+    // in use.
+    const size_t start = type == MemoryType::DeviceLocal ? 0 : ring.current;
     for (size_t i = 0; i < ring.blocks.size(); ++i) {
-        const size_t index = (ring.current + i) % ring.blocks.size();
+        const size_t index = (start + i) % ring.blocks.size();
         Block* block = &ring.blocks[index];
         if (const auto offset = block->buffer->Reserve(size, alignment, false)) {
             ring.current = index;
@@ -167,8 +175,9 @@ void StagingBufferPool::FreeDeferred(const StagingBufferRef& ref) {
 
 void StagingBufferPool::TickFrame() {
     ++frame;
-    for (Ring& ring : rings) {
-        TrimRing(ring);
+    for (u32 type = 0; type < rings.size(); ++type) {
+        const bool vram = type == u32(MemoryType::DeviceLocal);
+        TrimRing(rings[type], vram ? keep_vram_blocks : keep_blocks);
     }
     for (auto& cache : large_caches) {
         TrimLarge(cache);
@@ -176,11 +185,11 @@ void StagingBufferPool::TickFrame() {
     PublishStats();
 }
 
-void StagingBufferPool::TrimRing(Ring& ring) {
+void StagingBufferPool::TrimRing(Ring& ring, u64 keep) {
     auto& blocks = ring.blocks;
     for (size_t i = blocks.size(); i-- > 0;) {
         const Block& block = blocks[i];
-        if (blocks.size() <= keep_blocks || frame - block.last_used_frame < RING_IDLE_FRAMES ||
+        if (blocks.size() <= keep || frame - block.last_used_frame < RING_IDLE_FRAMES ||
             !scheduler.IsFree(block.buffer->LastTick())) {
             continue;
         }

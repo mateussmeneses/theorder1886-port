@@ -1025,6 +1025,48 @@ static int cpu_supported(char *missing, size_t size) {
     return 1;
 }
 
+#ifdef _WIN32
+/* When free physical memory runs out (GPU allocations past the VRAM budget spill to system
+ * memory on a 16 GB machine) Windows stops responding and needs a hard reset. Quit first, with
+ * the reason in the log. THEORDER_RAM_GUARD_MB=N: limit in MiB (default 700, 0: off).
+ * From TOport (IgorAugustoHH/The-Order-1886-PC-Port, src/probe.c, BB_RAM_GUARD_MB). */
+static DWORD WINAPI ram_guard(LPVOID arg) {
+    const unsigned long long limit = (unsigned long long)(uintptr_t)arg << 20;
+    unsigned low = 0, ticks = 0;
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    for (;;) {
+        MEMORYSTATUSEX status = {.dwLength = sizeof(status)};
+        if (GlobalMemoryStatusEx(&status)) {
+            if (++ticks % 120 == 0)
+                printf("Memory: system RAM %llu MiB free of %llu, commit %llu MiB free\n",
+                       status.ullAvailPhys >> 20, status.ullTotalPhys >> 20,
+                       status.ullAvailPageFile >> 20);
+            low = status.ullAvailPhys < limit ? low + 1 : 0;
+            if (low >= 4) {
+                fprintf(stderr, "STOP: system RAM almost exhausted (%llu MiB free, guard %llu MiB);"
+                        " quitting before Windows stops responding (THEORDER_RAM_GUARD_MB=0: off)\n",
+                        status.ullAvailPhys >> 20, limit >> 20);
+                fflush(stderr); fflush(stdout);
+                TerminateProcess(GetCurrentProcess(), 3);
+            }
+        }
+        Sleep(250);
+    }
+    return 0;
+}
+
+static void start_ram_guard(void) {
+    const char *guard = getenv("THEORDER_RAM_GUARD_MB");
+    const unsigned long guard_mb = guard ? strtoul(guard, NULL, 10) : 700;
+    if (!guard_mb) return;
+    HANDLE thread = CreateThread(NULL, 64 * 1024, ram_guard, (LPVOID)(uintptr_t)guard_mb, 0, NULL);
+    if (thread) {
+        SetThreadDescription(thread, L"theorder:RamGuard");
+        CloseHandle(thread);
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifndef _WIN32
@@ -1158,6 +1200,7 @@ int main(int argc, char **argv) {
     SYSTEM_INFO system_info; GetSystemInfo(&system_info); page_size = system_info.dwPageSize;
     AddVectoredExceptionHandler(1, vectored_fault);
     SetUnhandledExceptionFilter(unhandled_fault);
+    start_ram_guard();
     const char *strict_handles = getenv("THEORDER_STRICT_HANDLES");
     if (strict_handles) {
         PROCESS_MITIGATION_STRICT_HANDLE_CHECK_POLICY strict={0};

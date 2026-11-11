@@ -37,7 +37,11 @@ Result Normalize(Info& info) {
     const auto schema = Schema(info.pgm_hash);
     if (!schema.words || info.sw_stage != decltype(info.sw_stage)::Vertex ||
         info.flattened_ud_buf.size() != schema.words || info.images.size() != schema.images ||
-        info.buffers.size() != schema.buffers || info.samplers.size() != 1 || !info.fmasks.empty()) return {};
+        // This port's recompiler declares one buffer fewer for these programs than TOport's
+        // (7/9 vs 8/10): with TOport's exact count the fix never applied here, and the four
+        // programs kept 116-126 permutations each. The image origins below still pin the layout.
+        (info.buffers.size() != schema.buffers && info.buffers.size() + 1 != schema.buffers) ||
+        info.samplers.size() != 1 || !info.fmasks.empty()) return {};
     auto& flat = info.flattened_ud_buf;
     const auto active = flat[schema.count_word];
     if (active > 16) return {}; // malformed/new schema: retain the original behavior

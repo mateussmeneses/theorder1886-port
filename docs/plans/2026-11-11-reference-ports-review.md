@@ -106,3 +106,23 @@ path with `core.longpaths` (FSR generated headers exceed MAX_PATH), our
 - Next step: port the package index (`runtime_oodle_index.c`) and the area prefetch
   (`vk_pipeline_cache.cpp` a5327ef) behind `THEORDER_AREA_PREFETCH`, off by default, and
   measure session 2/3 hitch windows A/B on the prologue route.
+
+## Root cause found: the particle SRT fix never applied here (2026-11-11)
+
+The four programs with 116-126 permutations each (0xc75dd317, 0xad441fb1, 0xa8792bbb,
+0x8c8a4817) are TOport's "billboard VS programs with 16 guarded GI texture pairs", whose unused
+tail held recycled T#s. We already had TOport's `bb_particle_srt.h` (on by default), but a
+diagnostic showed every call rejected on `info.buffers.size()`: our recompiler declares one buffer
+fewer (7/9 vs TOport's 8/10). Accepting that count, all calls apply (`active 7`, as TOport's
+"live guard count is 7"). Same route, three sessions in a row, cold profile first:
+
+| | before | after | TOport |
+|---|---|---|---|
+| windows > 100 ms, session 1 / 2 / 3 | 15 / 7 / 7 | **3 / 1 / 1** | 3 / 0 / – |
+| driver pipeline builds after session 1 | 38-39 | **0** | ~8 |
+| stored permutations | 821 | **472** | 398 |
+| stored pipelines | 638 | **341** | 305 |
+
+Picture: the prologue cutscene renders normally with the fix (no visible artefact in a frame
+dump); not compared pixel for pixel (the two dumps caught different moments).
+`THEORDER_PARTICLE_SRT_FIX=0` disables it. The area prefetch is no longer the next step for #113.

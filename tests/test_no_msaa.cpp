@@ -43,6 +43,14 @@ int main() {
     Image flat{};
     flat.type = static_cast<u64>(ImageType::Color2D);
     flat.last_level = 3;
+    // 64x64: a full mip chain of 7 levels, so the 4 declared ones are valid (NumLevels clamps a
+    // declaration past the extent's mip chain, SpartanPort 655b311 / shadPS4 #5453).
+    flat.width = 63;
+    flat.height = 63;
+    Image tiny = flat;
+    tiny.width = 0;
+    tiny.height = 0;
+    assert(tiny.NumLevels() == 1); // 1x1 declaring 4 levels: only one exists
     ColorBuffer color{};
     color.attrib.num_fragments_log2 = 1;
     color.info.format = static_cast<u32>(DataFormat::Format8_8_8_8);

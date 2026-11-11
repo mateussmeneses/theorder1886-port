@@ -2662,7 +2662,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     }
 
     // Image clear must be valid and number of component must match
-    // spartanport: a cached image of another format with the same size (R32 where the game now
+    // port: a cached image of another format with the same size (R32 where the game now
     // writes RGBA8) must not take a clear made for the buffer's format.
     VideoCore::Image& image1 = texture_cache.GetImage(image1_id);
     if (image1.info.guest_size != buf1.GetSize() || image1.info.num_bits != buf1_bpp ||
@@ -2670,7 +2670,7 @@ bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
         AmdGpu::NumComponents(buf1.GetDataFmt()) != vk::componentCount(image1.info.pixel_format)) {
         return false;
     }
-    // spartanport: the component count alone lets RGBA8 over RGB10A2, or UNORM over sRGB, through.
+    // port: the component count alone lets RGBA8 over RGB10A2, or UNORM over sRGB, through.
     // Take the shortcut only when the buffer's format is exactly the image's format (godlyfast).
     const vk::Format buffer_format =
         LiverpoolToVK::TrySurfaceFormat(buf1.GetDataFmt(), buf1.GetNumberFmt());
@@ -2945,7 +2945,7 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
     // TextureSetMemo: what this call resolves, to remember when the set qualifies.
     std::array<TextureSetEntry, TextureSet::MaxImages> resolved{};
     bool set_ok = set_slot != nullptr;
-    // spartanport: the generation the first binding resolved under. A later binding's FindImage
+    // port: the generation the first binding resolved under. A later binding's FindImage
     // may (un)register images, which can change an earlier binding's answer; stamping the set
     // with the generation after that kept replaying the earlier answer (the found_id memo already
     // records only when the generation did not move).

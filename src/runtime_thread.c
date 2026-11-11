@@ -283,6 +283,15 @@ void runtime_orbis_fpu(void) {
 static void *host_start(void *p) {
     GuestThread *t=p;
     runtime_orbis_fpu();
+#if defined(__x86_64__)
+    { /* activation evidence: the first game-created thread reports its state once */
+        static int logged;
+        if (!__atomic_exchange_n(&logged,1,__ATOMIC_RELAXED)) {
+            uint32_t mxcsr=0; __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+            printf("Runtime: first guest thread FPU state MXCSR %#x (PS4: 0x9fc0)\n",mxcsr);
+        }
+    }
+#endif
     attach(t);
     set_host_name(t->name);
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);

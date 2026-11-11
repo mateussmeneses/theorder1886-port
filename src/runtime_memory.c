@@ -892,7 +892,6 @@ void runtime_low_free(void *pointer) {
     LowFree *f=(LowFree *)block; f->next=low_free[h.kind]; low_free[h.kind]=f;
     pthread_mutex_unlock(&low_lock);
 }
-/* ---- GPU library interface (gpu/shim/spartanportgpu.cpp) ---- */
 /* ---- GPU library interface (gpu/shim/theordergpu.cpp) ---- */
 /* Optimizations switched off at run time (diagnostics): the number in the file named by
  * THEORDER_TOGGLE_FILE, re-read every 250 ms. Bits: 2 fetch shader cache,

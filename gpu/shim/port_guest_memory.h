@@ -8,6 +8,7 @@
 #include <csetjmp>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include "port_toggles.h"
 
@@ -33,6 +34,12 @@ namespace PortGuest {
         // The fault handler has cleared runtime_fault_recover. Discard the partial copy.
         runtime_fault_recover = nullptr;
         std::memset(destination, 0, size);
+        // Activation evidence: the first recovered reads, with the stale table address.
+        static std::atomic<unsigned> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
+            std::printf("Shader: stale guest descriptor table %#llx read as empty\n",
+                        static_cast<unsigned long long>(address));
+        }
         return false;
     }
     // The fences keep the compiler from dropping the store of the recovery point as dead or

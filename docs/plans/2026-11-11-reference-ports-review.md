@@ -145,3 +145,11 @@ point).
 No object flicker in this scene in either port. The reported flicker (#95, #99, #29, #30) needs
 scenes this route does not reach (combat, Whitechapel): a save at such a checkpoint is the next
 input. The HUD text shimmer only appears with the 60 FPS patch.
+
+### 16:9 retest (#29)
+
+With `aspect_ratio=16:9` actually applied (`Patches: ... 'Aspect Ratio - 16:9'`), two runs on the
+same scene: 92 distinct frames each, ABA max 0.011 % per triple, all of it the same HUD text edges
+(x 1512-1886, y 308-404). No object flicker with 16:9 either. (A first attempt never presented a
+frame: it stalled during boot allocation while free commit memory was down to ~4.7 GB; the two
+repeats with ~30 GB free were normal.)

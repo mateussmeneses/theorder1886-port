@@ -113,3 +113,20 @@ and DoF boxes and removed them in v0.1.7): a reverse-engineering task, not a por
 | 7 | E launcher: spike the Rust launcher on a branch (build, rebrand, run The Order through its runner); decide adopt vs. port pages to Python | a decision note with the measured gaps |
 
 Releases bundle finished phases (v0.9.0 after phases 1-2).
+
+## Progress (2026-11-11)
+
+- Phase 1 merged: #125-#129.
+- Phase 2 merged:
+  - #130: texture cache.
+  - #131: GPU/Vulkan.
+  - #132: foreground window.
+  - #133: the c22329f bundle, about 40% taken; the rest already existed here.
+  - #134: guarded descriptor reads, a94665c.
+  - Skipped: 368d899, b776be7, 7cdbb40, d6d1aea.
+- Phase 3: #135 (fe9e7b0, ad2784f, the audio core of 1e95c7c). 9e9cd33 does not apply (no trophy sound).
+  - The menu and launcher fields for `audio_channels` and `master_volume` come with phases 4 and 7.
+- Pending checks:
+  - reporters' retest for #99 and #63;
+  - runtime-test hangs on Windows and stays out of the gate;
+  - no regression tests yet for 1974453 and 3a555df.

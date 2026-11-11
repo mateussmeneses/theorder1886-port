@@ -208,9 +208,17 @@ bool Dlss::CreateFeature(vk::CommandBuffer command, const FeatureDesc& desc) {
         return false;
     }
     impl->feature.reset();
+    // THEORDER_DLSS_PRESET: NGX render preset (default 0, the driver's choice). TOport ships
+    // 11 = K (DLSS 4 transformer, lighter than the 4.5 presets L/M on RTX 20) and 6 = F when it
+    // upscales the finished frame (K left trails on moving edges there). Opt-in here until it is
+    // checked on an RTX card.
+    static const u32 preset = [] {
+        const char* env = std::getenv("THEORDER_DLSS_PRESET");
+        return env && env[0] ? u32(std::strtoul(env, nullptr, 10)) : 0u;
+    }();
     const PortDlssFeature feature{desc.input_width,  desc.input_height, desc.output_width,
                                 desc.output_height, desc.quality,      0,
-                                0,                  desc.hdr ? 1 : 0};
+                                preset,             desc.hdr ? 1 : 0};
     if (!impl->api->CreateFeature(command, &feature)) {
         return false;
     }

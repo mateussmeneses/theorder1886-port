@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <cstdlib>
+#include <cstring>
 #include <mutex>
 #include <unordered_set>
 #include <xxhash.h>
@@ -1019,7 +1021,14 @@ const GraphicsPipeline* Rasterizer::ResolvePendingGraphics(const GraphicsPipelin
         const u64 vs_hash = key.stage_hashes[0];
         const u64 ps_hash = key.stage_hashes[4];
         const u64 frame = FrameCapture::CurrentFrameIndex();
-        if (TargetsVisibleSceneAttachment(key.mrt_mask)) {
+        // THEORDER_PENDING_DRAWS=skip: never wait, as TOport does (its "async-skip" mode): no
+        // 100-300 ms hitch on a first-visit pipeline, but that draw is missing for the frames it
+        // compiles, which is the first-visit flicker the wait fixed (964bd03, Class C).
+        static const bool skip_visible = [] {
+            const char* env = std::getenv("THEORDER_PENDING_DRAWS");
+            return env && std::strcmp(env, "skip") == 0;
+        }();
+        if (!skip_visible && TargetsVisibleSceneAttachment(key.mrt_mask)) {
             // Stall this one visible draw on exactly this one compile instead of dropping it.
             if (const auto* ready = pipeline_cache.WaitGraphics(key)) {
                 // Never silent: a stalled draw is logged, then proceeds (DrawRecord mints its own

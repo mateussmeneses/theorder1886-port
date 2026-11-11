@@ -91,6 +91,9 @@ Findings, in the order they were fixed:
    to a new staging block makes the kernel allocate and clear it (~2 ms per 16 MiB), and the
    staging pool freed blocks after 3 s idle, between streaming bursts. It now keeps 512 MiB
    (`THEORDER_STAGING_KEEP_MB`), frees the rest after 30 s and populates 128 MiB at startup.
+   The VRAM ring (scratch for detiling and copies) keeps only `THEORDER_STAGING_KEEP_VRAM_MB`
+   (32 MiB) and restarts at its first block every frame, so blocks added for an area load are
+   trimmed again (SpartanPort 812190a, 23d457f).
 3. Write faults: a 256 KiB unprotect window (`THEORDER_FAULT_WINDOW`) halves them again.
    `THEORDER_UFFD=1` tracks writes with userfaultfd write-protection instead of mprotect (no
    address-space write lock, no mapping splits); read protection for readbacks still uses

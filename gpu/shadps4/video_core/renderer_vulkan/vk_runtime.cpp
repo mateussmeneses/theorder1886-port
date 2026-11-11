@@ -603,8 +603,9 @@ bool Runtime::CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst) {
                          : vk::AccessFlagBits2::eColorAttachmentWrite);
             if (needs_flush) FlushBarriers();
             if (to_depth) {
+                // port: the backing's real sample count, clamped to the host (#5595), as below.
                 blit_helper->ReinterpretColorAsMsDepth(dst->info.size.width, dst->info.size.height,
-                    dst->info.num_samples, src->info.num_samples > 1,
+                    static_cast<u32>(dst->backing->image.image_ci.samples), src->info.num_samples > 1,
                     src->info.pixel_format, dst->info.pixel_format,
                     src->GetImage(), dst->GetImage());
             } else {

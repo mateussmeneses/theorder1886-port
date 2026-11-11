@@ -1156,6 +1156,13 @@ void PipelineCache::PublishCompute(bool wait) {
             ++it;
             continue;
         }
+        // port: a pipeline the driver refused (null handle) stays out of the disk store; an
+        // empty marker makes later dispatches skip it instead of binding VK_NULL_HANDLE.
+        if (!build->pipeline || !build->pipeline->IsValid()) {
+            compute_pipelines.emplace(build->key, nullptr);
+            it = pending_compute.erase(it);
+            continue;
+        }
         build->pipeline->PublishStage(build->live_info);
         RegisterPipelineData(build->key, build->data);
         compute_pipelines.emplace(build->key, std::move(build->pipeline));
@@ -1627,7 +1634,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         if (found->second && !found->second->hot_noted) {
             NoteHot(*found->second, 'c', compute_key.value);
         }
-        return found->second.get();
+        return found->second && found->second->IsValid() ? found->second.get() : nullptr;
     }
     const bool can_async = SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
                            !EmulatorSettings.IsShaderCollect() &&

@@ -22,7 +22,7 @@ language package, damaged shader cache, RAM guard, SRT walker stack fix.
 
 | Problem | Issues | State |
 |---|---|---|
-| Flickering objects and decals | #95, #99, #30, #29 | not reproduced in a matched A/B yet; next work item |
+| Flickering objects and decals | #95, #99, #30, #29 | none in the prologue cover tutorial in either port (`tools/flicker_scan.py`); needs a save at a reported scene. HUD text shimmers with the 60 FPS patch |
 | Black screen in gameplay/FMV since 0.7 (menus visible) | #98, #116, #47, #24, #43 | needs logs on v0.8.3 |
 | First-visit stutters in new areas | #114, #120, #68 | expected while pipelines compile once; measure per area |
 | Missing grenade smoke (The Atrium) | — | reproduced on v0.7.9 and v0.8.x |

@@ -2154,6 +2154,14 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
                 !PortToggle::Disabled(PortToggle::PreparedResources)
             ? &prepared->vertex
             : nullptr;
+    // port: TryPreparedPipeline compared the V#s when the pipeline was chosen, but a
+    // write queued before this draw (WriteData, DMA) can change the table after that. Stale
+    // addresses or strides stretch polygons across the screen: the V#s are read again then.
+    if (ready &&
+        !fetch.SharpsUnchanged(pipeline->GetStage(Shader::SwStage::Vertex), ready->buffers)) {
+        NoteStaleVertexInputs();
+        ready = nullptr;
+    }
     if (ready) {
         attributes.assign(ready->attributes, ready->attributes + ready->count);
         bindings.assign(ready->bindings, ready->bindings + ready->count);

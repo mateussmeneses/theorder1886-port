@@ -208,6 +208,9 @@ struct PrepWorker {
 struct PreparedDraw;
 class DrawPreparation;
 
+/// port: counts prepared draws whose V#s were stale; logs the total every 5 s at most.
+void NoteStaleVertexInputs();
+
 class PipelineCache {
 public:
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,

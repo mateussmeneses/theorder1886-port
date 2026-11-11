@@ -18,6 +18,7 @@
 #include "shader_recompiler/params.h"
 #include "shader_recompiler/resource.h"
 #include "shader_recompiler/runtime_info.h"
+#include "port_guest_memory.h"
 
 namespace Serialization {
 struct Archive;
@@ -199,8 +200,23 @@ struct Info : InfoPersistent {
         const auto ud = UserData();
         const u32* base = ud.data();
         if (ptr_index != IR::NumScalarRegs) {
+            // port (SpartanPort a94665c, evill33t 2756fa5dce): the table is guest memory behind a
+            // user-data pointer. A null table, or one the game unmapped since the shader was
+            // built, faulted on the GPU thread and closed the game; a guarded copy reads it as an
+            // empty descriptor instead. A draw-preparation worker keeps its own recovery point.
+            if (ptr_index >= ud.size() || ud.size() - ptr_index < 2) {
+                std::memset(&data, 0, sizeof(T));
+                return data;
+            }
             std::memcpy(&base, &ud[ptr_index], sizeof(base));
             base = reinterpret_cast<const u32*>(VAddr(base) & 0xFFFFFFFFFFFFULL);
+            PortGuest::Read(&data, reinterpret_cast<std::uintptr_t>(base + dword_offset),
+                            sizeof(T));
+            return data;
+        }
+        if (dword_offset > ud.size() || sizeof(T) > (ud.size() - dword_offset) * sizeof(u32)) {
+            std::memset(&data, 0, sizeof(T));
+            return data;
         }
         std::memcpy(&data, base + dword_offset, sizeof(T));
         return data;
@@ -225,9 +241,8 @@ struct Info : InfoPersistent {
         auto buf = ReadUdReg<AmdGpu::Buffer>(static_cast<u32>(tess_consts_ptr_base),
                                              static_cast<u32>(tess_consts_dword_offset));
         VAddr tess_constants_addr = buf.base_address;
-        memcpy(&tess_constants,
-               reinterpret_cast<TessellationDataConstantBuffer*>(tess_constants_addr),
-               sizeof(tess_constants));
+        // port (SpartanPort a94665c): a stale or null buffer reads as zeroed constants.
+        PortGuest::Read(&tess_constants, tess_constants_addr, sizeof(tess_constants));
     }
 
     void Serialize(Serialization::Archive& ar) const;

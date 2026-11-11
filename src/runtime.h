@@ -15,6 +15,8 @@ typedef port_jmp_buf sigjmp_buf;
 extern __thread sigjmp_buf *runtime_fault_recover;
 /* Restarts the game (in-game settings menu, render resolution change). */
 void runtime_restart(void);
+/* The floating-point state a PS4 gives its threads (runtime_thread.c). */
+void runtime_orbis_fpu(void);
 #define ABI __attribute__((sysv_abi))
 typedef void (ABI *GuestCallback)(void);
 void runtime_start(uint64_t capabilities);
@@ -75,6 +77,9 @@ void runtime_thread_keys_cleanup(void);
 /* Guest-visible errno values are FreeBSD's. */
 int32_t runtime_guest_errno(int host_errno);
 void *runtime_low_map(size_t size, int prot);
+/* Zeroed, 64-byte aligned host records the guest sees by address, below 1 TiB (THEORDER_LOW_HANDLES). */
+void *runtime_low_alloc(size_t size);
+void runtime_low_free(void *pointer);
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);
 uintptr_t runtime_ajm_resolve(const char *name);

@@ -237,6 +237,13 @@ if (WIN32)
         target_include_directories(${test} PRIVATE .. ../src)
         target_link_libraries(${test} PRIVATE atrac9 PkgConfig::FFMPEG bcrypt -pthread)
     endforeach()
+    # Guest handles below 1 TiB (runtime_low_alloc), from SpartanPort c8e561a.
+    add_executable(low-handles-test EXCLUDE_FROM_ALL ../tests/test_low_handles.c ../src/runtime_memory.c
+        ../src/runtime_mutex.c ../src/compat_win.c)
+    set_target_properties(low-handles-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(low-handles-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_include_directories(low-handles-test PRIVATE .. ../src)
+    target_link_libraries(low-handles-test PRIVATE onecore bcrypt -pthread)
     add_executable(pad-map-test EXCLUDE_FROM_ALL ../tests/test_pad_map.c ../src/compat_win.c)
     set_target_properties(pad-map-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
     target_compile_options(pad-map-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

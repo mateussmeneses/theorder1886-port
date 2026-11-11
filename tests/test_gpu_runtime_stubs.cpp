@@ -28,5 +28,7 @@ int32_t* runtime_errno() { std::abort(); }
 int runtime_memory_write_backing(uintptr_t, const void*, uint64_t) { std::abort(); }
 int runtime_memory_is_mapped(uintptr_t, uint64_t) { return 1; }
 void runtime_report() { std::abort(); }
+uint64_t runtime_wait_begin() { return 0; }
+void runtime_wait_end(const char*, uint64_t, const char*, long long) {}
 }
 

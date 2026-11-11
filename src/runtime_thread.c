@@ -58,6 +58,33 @@ static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
 static ThreadAttr *attributes;
 static GuestThread *threads;
 static _Thread_local GuestThread *current;
+
+static int slow_wait_ms(void) {
+    static int threshold_ms=-1;
+    if (threshold_ms<0) { const char *e=getenv("THEORDER_SLOW_WAITS"); threshold_ms=e ? atoi(e) : 0; }
+    return threshold_ms;
+}
+uint64_t runtime_wait_begin(void) {
+    if (slow_wait_ms()<=0) return 0;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC,&t);
+    return (uint64_t)t.tv_sec*1000000000ull+(uint64_t)t.tv_nsec;
+}
+void runtime_wait_end(const char *what,uint64_t start,const char *detail,long long arg) {
+    if (!start) return;
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC,&t);
+    const uint64_t ns=(uint64_t)t.tv_sec*1000000000ull+(uint64_t)t.tv_nsec-start;
+    if (ns<(uint64_t)slow_wait_ms()*1000000ull) return;
+    static unsigned logged;
+    if (__atomic_fetch_add(&logged,1,__ATOMIC_RELAXED)>=4000) return;
+    /* Callers read errno after this (a failed read returns -errno); a failed log write must not
+     * change it. */
+    const int saved_errno=errno;
+    fprintf(stderr,"Slow wait: %s %.1f ms, thread '%s' %s %lld\n",what,ns/1e6,
+            current ? current->name : "host",detail ? detail : "",arg);
+    errno=saved_errno;
+}
 static _Thread_local int32_t guest_errno;
 static const unsigned char *tls_template;
 static uint64_t tls_filesz, tls_memsz, tls_align=16;
@@ -135,10 +162,22 @@ void runtime_thread_attach_main(void) {
     snprintf(t->name,sizeof(t->name),"main");
     describe_host_thread(t->name);
 }
+/* Records are never removed (games create threads again during every load), so a found
+ * thread moves to the front: the threads the game asks about (priorities, affinity) are not
+ * behind every finished one (from Awakenchan 0.9.34 beta 9.9). THEORDER_THREAD_FRONT=0: the list
+ * keeps its order, as before. */
 static GuestThread *find_thread(void *handle) {
+    static int front=-1;
+    if (front<0) { const char *e=getenv("THEORDER_THREAD_FRONT"); front=!(e && e[0]=='0'); }
     GuestThread *found=NULL;
     pthread_mutex_lock(&lock);
-    for (GuestThread *t=threads;t;t=t->next) if (t==handle) { found=t; break; }
+    GuestThread **link=&threads;
+    for (GuestThread *t=threads;t;link=&t->next,t=t->next) {
+        if (t!=handle) continue;
+        found=t;
+        if (front && link!=&threads) { *link=t->next; t->next=threads; threads=t; }
+        break;
+    }
     pthread_mutex_unlock(&lock);
     return found;
 }
@@ -342,7 +381,9 @@ static ABI int32_t thread_join(GuestThread *t,void **result) {
     if (t->detached || t->joined) return ERR(22);
     t->joined=1;
     void *value=NULL;
+    const uint64_t wait_start=runtime_wait_begin();
     int e=pthread_join(t->host,&value);
+    runtime_wait_end("thread join",wait_start,t->name,0);
     if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); exit(21); }
     if (result) *result=t->result;
     pthread_mutex_lock(&lock); ++joined_count; pthread_mutex_unlock(&lock);

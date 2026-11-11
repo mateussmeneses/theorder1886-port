@@ -93,6 +93,37 @@ class EngineLanguageTest(unittest.TestCase):
         self.assertEqual(run.engine_language(1, 'CUSA00035'), 0)
         self.assertEqual(run.engine_language(0, 'CUSA00035'), 18)
 
+    def setUp(self):
+        self.temp_dir = TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+
+    def make_dump(self, *packages):
+        game = Path(self.temp_dir.name) / 'game'
+        folder = game / '_data' / '1408209885' / 'ps4' / 'primary' / '3861c21fc34b7612' / 'v1'
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / '2690af50a36aa2b1').write_bytes(b'')
+        for package in packages:
+            (folder / package).write_bytes(b'')
+        return game
+
+    def test_missing_language_package_falls_back_to_english(self):
+        # CUSA00035 01.02 ships neither Portuguese package: both boot to a black screen.
+        game = self.make_dump()
+        self.assertEqual(run.available_language(17, 7, game), (1, 0))
+        self.assertEqual(run.available_language(17, 17, game), (1, 0))
+
+    def test_pt_br_without_its_package_uses_pt_pt_when_present(self):
+        game = self.make_dump(run.LANGUAGE_PACKAGES[7])
+        self.assertEqual(run.available_language(17, 17, game), (17, 7))
+        self.assertEqual(run.available_language(17, 7, game), (17, 7))
+
+    def test_present_package_and_unknown_languages_are_kept(self):
+        game = self.make_dump(run.LANGUAGE_PACKAGES[17])
+        self.assertEqual(run.available_language(17, 17, game), (17, 17))
+        self.assertEqual(run.available_language(2, 2, self.make_dump()), (2, 2))
+        # Not an unpacked dump (no _data): nothing is checked.
+        self.assertEqual(run.available_language(17, 7, Path(self.temp_dir.name)), (17, 7))
+
 
 if __name__ == '__main__':
     unittest.main()

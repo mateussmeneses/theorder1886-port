@@ -154,6 +154,35 @@ def engine_language(ps4_lang, title_id):
     return PS4_TO_ENGINE_LANG.get(ps4_lang, ps4_lang)
 
 
+# Localization package the game opens at boot for an engine language (seen in the file log of
+# CUSA00035 01.02: open(.../ps4/primary/3861c21fc34b7612/v.../<id>) -> not found). Without it the
+# game logs "Encountered an error" and stays on a black screen before the menu.
+LANGUAGE_PACKAGES = {7: '1cf8f1244dcc1dd4', 17: 'b0b4572d23e56916'}
+
+
+def language_package_present(game, engine_lang):
+    """False only when the language has a known package and the dump has no copy of it."""
+    package = LANGUAGE_PACKAGES.get(engine_lang)
+    if not package or not game:
+        return True
+    data = Path(game) / '_data'
+    if not data.is_dir():
+        return True  # not an unpacked dump: nothing to check
+    for folder in ('primary', 'PRIMARY', 'gpu', 'GPU'):
+        if any(data.glob(f'*/ps4/{folder}/*/*/{package}')):
+            return True
+    return False
+
+
+def available_language(ps4_lang, engine_lang, game):
+    """(ps4_lang, engine_lang) the dump can boot: PT-BR -> PT-PT -> English when packages lack."""
+    if language_package_present(game, engine_lang):
+        return ps4_lang, engine_lang
+    if engine_lang == 17 and language_package_present(game, 7):
+        return ps4_lang, 7
+    return 1, PS4_TO_ENGINE_LANG[1]
+
+
 LANG_CODE_TO_PS4 = {
     'ja': 0, 'japanese': 0,
     'en': 1, 'en-us': 1, 'us': 1, 'english': 1,
@@ -487,6 +516,12 @@ def main():
         engine_lang = engine_language(ps4_lang, title_id)
         if ps4_lang == 17 and engine_lang == 7:
             print(f'Language: Title {title_id} lacks native PT-BR assets, mapping Portuguese to engine id 7 (PT-PT)', flush=True)
+        fallback_lang, fallback_engine = available_language(ps4_lang, engine_lang, game)
+        if fallback_engine != engine_lang:
+            print(f'Language: this dump has no package for engine language {engine_lang} '
+                  f'({LANGUAGE_PACKAGES.get(engine_lang)}); the game would stay on a black screen, '
+                  f'using engine language {fallback_engine} instead', flush=True)
+            ps4_lang, engine_lang = fallback_lang, fallback_engine
         env['THEORDER_LANGUAGE'] = str(ps4_lang)
         print(f'Language: PS4 id {ps4_lang} -> engine id {engine_lang}', flush=True)
 

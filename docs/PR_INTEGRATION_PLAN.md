@@ -11,7 +11,7 @@
 
 ## 1. Resumo Executivo e Inventário Geral
 
-Foram auditados todos os 15 Pull Requests abertos, submetidos pelo colaborador `@figormartins`. Todos os PRs contêm documentação técnica formal associada em `docs/plans/2026-10-21-*.md` e testes isolados focados em cada subsistema.
+Foram auditados todos os 15 Pull Requests abertos, submetidos pelo colaborador `@figormartins`. Todos os PRs contêm documentação técnica formal associada em `docs/plans/archive/2026-10-21-*.md` e testes isolados focados em cada subsistema.
 
 Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. Não existem workflows automatizados no GitHub Actions configurados no repositório remoto (`.github/workflows` inexistente). O script central de validação (`tools/run_tests.sh`) depende de um ambiente configurado com Ninja e dependências de compilação C++ completas do renderizador. O autor utilizou harnesses isolados com *doubles* de dependências leves para demonstrar o comportamento RED (falha no master) -> GREEN (sucesso na branch do PR).
 
@@ -52,7 +52,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Issue Relacionada:** [#38 — Bug: In-game pause menu does not respond to keyboard input (v0.7.5)](https://github.com/mateussmeneses/theorder1886-port/issues/38)
 - **Arquivos Alterados:**
   - `README.es.md`, `README.md`, `README.pt-BR.md`
-  - `docs/plans/2026-10-21-keyboard-options.md`
+  - `docs/plans/archive/2026-10-21-keyboard-options.md`
   - `src/runtime_pad.c`
   - `tests/test_launcher_controls.py`
   - `tests/test_pad_map.c`
@@ -72,7 +72,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-27-ultrawide-settings`
 - **Issue Relacionada:** [#27 — add ultrawide 32:9](https://github.com/mateussmeneses/theorder1886-port/issues/27)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-ultrawide-settings.md`
+  - `docs/plans/archive/2026-10-21-ultrawide-settings.md`
   - `gpu/shim/port_graphics.h`
   - `gpu/shim/port_settings.cpp`
   - `gpu/shim/port_settings.h`
@@ -94,7 +94,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-28-saved-language`
 - **Issue Relacionada:** [#28 — Não funciona o idioma Português-Brasil](https://github.com/mateussmeneses/theorder1886-port/issues/28)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-saved-language.md`
+  - `docs/plans/archive/2026-10-21-saved-language.md`
   - `run.py`
   - `tests/test_run_language.py`
 - **Causa Raiz:** No script de inicialização `run.py`, a rotina `resolve_language` tenta ler o idioma configurado no arquivo `settings.json` do launcher invocando `json.loads()`. Todavia, o módulo `json` da biblioteca padrão do Python não estava importado no arquivo. A exceção `NameError: name 'json' is not defined` era suprimida pelo bloco `except Exception:`, fazendo com que o jogo caísse no fallback padrão baseado no idioma do Windows (geralmente inglês), ignorando a seleção de PT-BR ou outro idioma salvo.
@@ -111,7 +111,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-37-mouse-sensitivity-range`
 - **Issue Relacionada:** [#37 — Mouse](https://github.com/mateussmeneses/theorder1886-port/issues/37)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-mouse-sensitivity-range.md`
+  - `docs/plans/archive/2026-10-21-mouse-sensitivity-range.md`
   - `gpu/shim/port_overlay.cpp`
 - **Causa Raiz:** O backend de configurações e a aba Image aceitavam sensibilidade de 10% a 400%, mas o slider da aba Controls no overlay ImGui limitava o intervalo a `10, 300`. Devido à flag `ImGuiSliderFlags_AlwaysClamp`, o usuário ficava impedido de selecionar valores entre 301% e 400% pela aba de controles.
 - **Análise da Implementação:**
@@ -126,7 +126,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-2-package-startup`
 - **Issue Relacionada:** [#2 — Request for Official Linux Support in Future Updates](https://github.com/mateussmeneses/theorder1886-port/issues/2)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-linux-package-startup.md`
+  - `docs/plans/archive/2026-10-21-linux-package-startup.md`
   - `packaging/default.nix`
 - **Causa Raiz:** Na receita de empacotamento Nix/AppImage para Linux (`packaging/default.nix`), a lista de arquivos permitidos (`wanted`) e a fase de instalação (`installPhase`) incluíam o script de shell `run.sh`, mas omitiam `run.py`. Como `run.sh` executa `python3 run.py`, o pacote falhava logo no lançamento com erro de arquivo não encontrado.
 - **Análise da Implementação:**
@@ -141,7 +141,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-22-overlay-120fps`
 - **Issue Relacionada:** [#22 — FSR 4.1.1 e Framerate de 120 FPS?.](https://github.com/mateussmeneses/theorder1886-port/issues/22)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-overlay-120fps.md`
+  - `docs/plans/archive/2026-10-21-overlay-120fps.md`
   - `gpu/shim/port_overlay.cpp`
 - **Causa Raiz:** O launcher e o backend C++ já suportavam a opção de 120 FPS (`engine_fps = 240`), associada ao patch de 120 FPS no XML de patches. No entanto, o dropdown da aba Performance no overlay ImGui mantinha fixas apenas 2 opções ("30 (original)" e "60 (experimental)"). Adicionalmente, quando o usuário solicitava 120 FPS e o patch não estava disponível caindo para 60 FPS, a interface exibia um texto fixo incorreto: `"30 FPS: the 60 FPS patch is not available..."`.
 - **Análise da Implementação:**
@@ -158,7 +158,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-41-active-visible-targets`
 - **Issue Relacionada:** [#41 — stuttering, flickering](https://github.com/mateussmeneses/theorder1886-port/issues/41)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-active-visible-targets.md`
+  - `docs/plans/archive/2026-10-21-active-visible-targets.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_rasterizer.h`
 - **Causa Raiz:** A otimização FEAT-004 Class C introduziu um mecanismo para segurar (stall) na CPU a emissão de draw calls cujo pipeline gráfico ainda está compilando no background worker quando o draw mira um render target visível da cena (área >= 256x256), evitando buracos negros e artefatos na tela. No entanto, `TargetsVisibleSceneAttachment` inspecionava apenas a presença de ponteiros e tamanho em `regs.color_buffers[cb]`. Na GPU Liverpool/GCN, os registradores mantêm ponteiros residuais de buffers anteriores mesmo quando `color_control.mode == Mode::Disable`, ou quando a máscara de escrita `color_target_mask.GetMask(cb) == 0`, ou quando o pipeline atual nem sequer exporta aquele slot de MRT (`(mrt_mask & (1 << cb)) == 0`). Nesses casos, draws offscreen, depth-only ou sem escrita de cor eram incorretamente classificados como renderização de cena visível, forçando a CPU a bloquear por 130-250ms à toa, causando engasgos severos (*stutter*) e congelamentos.
@@ -190,7 +190,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-10-minimized-presentation`
 - **Issue Relacionada:** [#10 — Intel HD 630: characters are black silhouettes (only eyes show)](https://github.com/mateussmeneses/theorder1886-port/issues/10)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-minimized-presentation.md`
+  - `docs/plans/archive/2026-10-21-minimized-presentation.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_presenter.cpp`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_swapchain.cpp`
   - `gpu/shim/sdl_window.h`
@@ -212,7 +212,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-40-terminal-graphics-failures`
 - **Issue Relacionada:** [#40 — CPU load 100%](https://github.com/mateussmeneses/theorder1886-port/issues/40)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-terminal-graphics-failures.md`
+  - `docs/plans/archive/2026-10-21-terminal-graphics-failures.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_cache.cpp`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_cache.h`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_pipeline_serialization.cpp`
@@ -237,7 +237,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-26-preserve-shader-htile`
 - **Issue Relacionada:** [#26 — Sun shadows are still not appearing](https://github.com/mateussmeneses/theorder1886-port/issues/26)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-preserve-shader-htile.md`
+  - `docs/plans/archive/2026-10-21-preserve-shader-htile.md`
   - `gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp`
 - **Causa Raiz:** No PS4, metadados de aceleração de profundidade HTILE (Hierarchical Tile) podem ser gerados diretamente por compute shaders (`NoteMetaShaderWrite`). Quando o buffer cache tenta sincronizar dados da imagem para o buffer de memória (`BufferCache::SynchronizeMemoryFromImage`), o código invocava:
   ```cpp
@@ -268,7 +268,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-45-additive-target-classification`
 - **Issue Relacionada:** [#45 — Character overexposure + crushed dark environments (NVIDIA)](https://github.com/mateussmeneses/theorder1886-port/issues/45)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-additive-target-classification.md`
+  - `docs/plans/archive/2026-10-21-additive-target-classification.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_blend_rewrite.h`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp`
   - `tests/test_blend_rewrite.cpp`
@@ -298,7 +298,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/feat-35-native-output-resolution`
 - **Issue Relacionada:** [#35 — Changing internal rendering resolution](https://github.com/mateussmeneses/theorder1886-port/issues/35)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-native-output-resolution.md`
+  - `docs/plans/archive/2026-10-21-native-output-resolution.md`
   - `launcher/port_launcher_win.py`
   - `tests/test_launcher_controls.py`
   - `tests/test_launcher_save.py`
@@ -322,7 +322,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-29-texture-rebind-descriptor`
 - **Issue Relacionada:** [#29 — Black polygons and texture flicker](https://github.com/mateussmeneses/theorder1886-port/issues/29)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-texture-rebind-descriptor.md`
+  - `docs/plans/archive/2026-10-21-texture-rebind-descriptor.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_rasterizer.cpp`
 - **Causa Raiz:** Em `Rasterizer::BindTextures`, quando ocorre sobreposição de memória entre texturas (`old_image.binding.needs_rebind`), o renderizador cria um novo descritor `rebind_desc`, atualiza o ponteiro `desc_ptr = &rebind_desc` e chama `FindImage(rebind_desc)`. Essa função pode remapear o descritor para um mip level ou camada (layer) diferente da imagem substituta. Contudo, a referência `const auto& desc = *desc_ptr;` era declarada ANTES do bloco de rebind. Consequentemente, as linhas subsequentes do loop continuavam consumindo a referência antiga `desc`, utilizando o mip level e layer desatualizados para buscar views de textura, realizar transições de layout (`ImageLayout`) e registrar barreiras Vulkan. Isso provocava amostragem em sub-recursos inexistentes ou corrompidos, resultando em polígonos pretos e texturas piscando.
 - **Análise da Implementação:**
@@ -341,7 +341,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-31-dlss-provider-retry`
 - **Issue Relacionada:** [#31 — Add DLSS, XeSS, and Frame Generation support](https://github.com/mateussmeneses/theorder1886-port/issues/31)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-dlss-provider-retry.md`
+  - `docs/plans/archive/2026-10-21-dlss-provider-retry.md`
   - `gpu/shadps4/video_core/renderer_vulkan/vk_temporal_upscaler.cpp`
 - **Causa Raiz:** Quando a criação ou avaliação do recurso NGX (DLSS) falhava, o renderizador realizava fallback automático para o FSR 3.1 e ativava a flag `dlss_failed = true`. No entanto, essa flag nunca era limpa. Caso o usuário voltasse ao menu e selecionasse manualmente o DLSS outra vez, o renderizador continuava vendo `dlss_failed == true` e permanecia silenciosamente usando o FSR 3.1, enquanto a interface exibia que o DLSS estava selecionado.
 - **Análise da Implementação:**
@@ -362,7 +362,7 @@ Nenhum dos 15 PRs foi incorporado ao código do branch `master` até o momento. 
 - **Autor e Branch:** Igor Martins (`figormartins`) | `codex/fix-39-sampler-border-cache`
 - **Issue Relacionada:** [#39 — Colorful artifacts/random green and blue flares appearing in various areas.](https://github.com/mateussmeneses/theorder1886-port/issues/39)
 - **Arquivos Alterados:**
-  - `docs/plans/2026-10-21-sampler-border-cache.md`
+  - `docs/plans/archive/2026-10-21-sampler-border-cache.md`
   - `gpu/shadps4/video_core/texture_cache/sampler.cpp`
   - `gpu/shadps4/video_core/texture_cache/sampler.h`
   - `gpu/shadps4/video_core/texture_cache/texture_cache.cpp`

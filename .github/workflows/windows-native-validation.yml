@@ -1,17 +1,12 @@
 name: Windows CLANG64 native build and tests
 
 # No proprietary game files or local saves are required.
+# Runs on every PR and push to master so the required `gate` check always reports; the full
+# build only runs when code changed (docs-only changes pass the gate without it).
 on:
   pull_request:
-    paths:
-      - '.github/workflows/windows-native-validation.yml'
-      - 'gpu/**'
-      - 'src/**'
-      - 'third_party/**'
-      - 'build.sh'
-      - 'msys2-env.sh'
-      - 'tools/run_tests.sh'
-      - 'tests/**'
+  push:
+    branches: [master]
   workflow_dispatch:
 
 permissions:
@@ -22,8 +17,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "$base" 2>/dev/null; then
+            echo "code=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          changed="$(git diff --name-only "$base" HEAD)"
+          echo "$changed"
+          if grep -qvE '^(docs/|README|LICENSE|.*\.md$)' <<<"$changed"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   clang64:
     name: Full Windows build and native/Python unit tests
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -156,3 +186,15 @@ jobs:
             out/test-*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  gate:
+    name: gate
+    needs: [changes, clang64]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: |
+          echo "changes=${{ needs.changes.result }} code=${{ needs.changes.outputs.code }} clang64=${{ needs.clang64.result }}"
+          [[ "${{ needs.changes.result }}" == "success" ]] || exit 1
+          [[ "${{ needs.clang64.result }}" == "success" || "${{ needs.clang64.result }}" == "skipped" && "${{ needs.changes.outputs.code }}" == "false" ]] || exit 1

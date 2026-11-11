@@ -25,6 +25,17 @@ An issue may be marked as duplicate and linked to a master issue without losing 
   notices when porting code or ideas from SpartanPort, shadPS4, TOport, or other projects.
 - Avoid claims such as "fixed all flicker", "zero stutters" or "native 4K" without matching
   measurements and evidence.
+- `master` only accepts pull requests, and the `gate` check (the full Windows CLANG64 build and
+  tests) must pass before a merge; documentation-only PRs pass it without the build.
+- A fix that depends on a shader hash, a layout check or a toggle should show that it applies in
+  the scene it targets (a log line or counter from a real run), not only that it compiles.
+
+## Issue labels
+
+`needs:log` means we cannot continue without `user/last_run.log`; it is closed after 21 days
+without one (reopen it with the log). `status:needs-retest` means a fix shipped in the release
+named in the thread: please say whether the problem is gone. Issues close as fixed after that
+retest.
 
 ## Conduct and moderation
 

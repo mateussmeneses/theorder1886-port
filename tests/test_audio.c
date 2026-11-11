@@ -13,6 +13,9 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
     (void)table; (void)count; (void)name;
     return 0;
 }
+/* The menu's audio settings (theordergpu.cpp): the game's own volume and the layout that follows the device. */
+int theordergpu_audio_volume_percent(void) { return 100; }
+int theordergpu_audio_channels(void) { return 0; }
 
 #ifdef _WIN32
 static SDL_AudioStream *mock_fail_wasapi(SDL_AudioDeviceID dev, const SDL_AudioSpec *spec, SDL_AudioStreamCallback cb, void *user) {

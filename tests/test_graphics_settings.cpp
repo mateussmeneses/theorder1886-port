@@ -160,6 +160,53 @@ int main() {
     assert(Read(path).find("output_res=1600x900\n") != std::string::npos);
 
     {
+        // Audio (src/runtime_audio.c, SpartanPort 1e95c7c): the master volume is 0 to 200 percent,
+        // the speaker layout is named by key, anything unknown is automatic; both survive a save
+        // and the environment wins.
+        namespace S = PortSettings;
+        assert(S::ParseAudioChannels("auto") == S::AudioChannelsAuto && S::ParseAudioChannels("stereo") == S::AudioStereo);
+        assert(S::ParseAudioChannels("5.1") == S::Audio51 && S::ParseAudioChannels("7.1") == S::Audio71);
+        assert(S::ParseAudioChannels("2.0") == S::AudioStereo && S::ParseAudioChannels("6") == S::Audio51);
+        assert(S::ParseAudioChannels("8") == S::Audio71 && S::ParseAudioChannels("") == S::AudioChannelsAuto);
+        assert(S::ParseAudioChannels("bogus") == S::AudioChannelsAuto && S::ParseAudioChannels("7") == S::AudioChannelsAuto);
+        for (int c = 0; c < S::AudioChannelsCount; ++c) assert(S::ParseAudioChannels(S::AudioChannelKeys[c]) == c);
+        {
+            std::ofstream out(path);
+            out << "master_volume=150\naudio_channels=5.1\n";
+        }
+        S::Load();
+        assert(v.master_volume == 150 && v.audio_channels == S::Audio51);
+        S::Save();
+        const std::string audio_ini = Read(path);
+        assert(audio_ini.find("master_volume=150\n") != std::string::npos);
+        assert(audio_ini.find("audio_channels=5.1\n") != std::string::npos);
+        {
+            std::ofstream out(path);
+            out << "master_volume=900\naudio_channels=7.1\n";
+        }
+        S::Load();
+        assert(v.master_volume == 200 && v.audio_channels == S::Audio71);
+        {
+            std::ofstream out(path);
+            out << "master_volume=-5\naudio_channels=bogus\n";
+        }
+        S::Load();
+        assert(v.master_volume == 0 && v.audio_channels == S::AudioChannelsAuto);
+        {
+            std::ofstream out(path);
+            out << "master_volume=\n";
+        }
+        S::Load();
+        assert(v.master_volume == 100);
+        SetEnv("THEORDER_AUDIO_VOLUME", "80");
+        SetEnv("THEORDER_AUDIO_CHANNELS", "stereo");
+        S::Load();
+        assert(v.master_volume == 80 && v.audio_channels == S::AudioStereo);
+        SetEnv("THEORDER_AUDIO_VOLUME", "");
+        SetEnv("THEORDER_AUDIO_CHANNELS", "");
+    }
+
+    {
         std::ofstream out(path);
         out << "display_mode=huge\nfps_limit=7\naspect_ratio=4:3\nengine_fps=1\n"
                "rcas_strength=250\nframes_queued=9\n";

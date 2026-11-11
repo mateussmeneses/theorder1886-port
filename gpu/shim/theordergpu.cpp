@@ -256,6 +256,14 @@ static void StartProfileWriter() {
 }
 #endif
 
+extern "C" int theordergpu_audio_volume_percent(void) {
+    return PortSettings::Get().master_volume.load(std::memory_order_relaxed);
+}
+
+extern "C" int theordergpu_audio_channels(void) {
+    return PortSettings::Get().audio_channels.load(std::memory_order_relaxed);
+}
+
 extern "C" void theordergpu_flush_cache(void) {
     const char* env = std::getenv("THEORDER_CACHE_FLUSH_ON_EXIT");
     static const bool enabled = !(env && env[0] == '0');

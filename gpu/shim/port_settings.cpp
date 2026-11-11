@@ -131,6 +131,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fsr4_auto_exposure = i != 0;
     } else if (key == "fsr4_invert_jitter") {
         v.fsr4_invert_jitter = i != 0;
+    } else if (key == "master_volume") {
+        v.master_volume = value.empty() ? MasterVolumeDefault
+                                        : std::clamp(i, MasterVolumeMin, MasterVolumeMax);
+    } else if (key == "audio_channels") {
+        v.audio_channels = ParseAudioChannels(value);
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "output_res") {
@@ -181,6 +186,7 @@ void Load() {
         {"THEORDER_STALE_READBACK", "stale_readback"},     {"THEORDER_FSR1", "fsr1"},
         {"THEORDER_RCAS", "rcas"},                        {"THEORDER_FRAMES_AHEAD", "frames_queued"},
         {"THEORDER_ANISOTROPY", "anisotropy"},
+        {"THEORDER_AUDIO_VOLUME", "master_volume"},       {"THEORDER_AUDIO_CHANNELS", "audio_channels"},
     };
     for (const auto& [env, key] : env_keys) {
         if (const char* value = std::getenv(env); value && value[0]) {
@@ -299,6 +305,8 @@ void Save() {
     std::fprintf(file, "fov=%d\nmouse_look=%d\nmouse_sensitivity=%d\nmouse_sensitivity_y=%d\nmouse_invert_y=%d\nanisotropy=%d\n",
                  v.fov.load(), int(v.mouse_look.load()), v.mouse_sensitivity.load(),
                  v.mouse_sensitivity_y.load(), int(v.mouse_invert_y.load()), v.anisotropy.load());
+    std::fprintf(file, "master_volume=%d\naudio_channels=%s\n", v.master_volume.load(),
+                 AudioChannelKeys[std::clamp(v.audio_channels.load(), 0, AudioChannelsCount - 1)].data());
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

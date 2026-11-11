@@ -21,6 +21,12 @@ int theordergpu_init(const TheOrderGpuConfig *config);
 /* Unless THEORDER_CACHE_FLUSH_ON_EXIT=0: waits at most two seconds for queued shader-cache
  * writes before a window close or restart skips destructors (SpartanPort c22329f). */
 void theordergpu_flush_cache(void);
+/* Master volume of the game's audio, 0 to 200 percent (theorder.ini master_volume,
+ * THEORDER_AUDIO_VOLUME; 100: the game's own mix, more is boosted behind a soft limiter). */
+int theordergpu_audio_volume_percent(void);
+/* Speaker layout for the game's 7.1 audio (theorder.ini audio_channels, THEORDER_AUDIO_CHANNELS):
+ * 0 automatic (the device's), 1 stereo, 2 5.1, 3 7.1. Read when an audio port is opened. */
+int theordergpu_audio_channels(void);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t theordergpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */

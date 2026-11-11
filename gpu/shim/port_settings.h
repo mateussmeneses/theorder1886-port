@@ -7,8 +7,26 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string_view>
 
 namespace PortSettings {
+
+/// port (SpartanPort 1e95c7c): speaker layout the game's 7.1 audio is sent in
+/// (src/runtime_audio.c): the playback device's own, stereo, 5.1 or 7.1. theorder.ini
+/// audio_channels and THEORDER_AUDIO_CHANNELS name them as below.
+enum AudioChannels : int { AudioChannelsAuto = 0, AudioStereo, Audio51, Audio71, AudioChannelsCount };
+inline constexpr std::string_view AudioChannelKeys[AudioChannelsCount] = {"auto", "stereo", "5.1", "7.1"};
+/// A layout key (also "2.0", "2", "6" and "8"); anything else is automatic.
+inline int ParseAudioChannels(std::string_view value) {
+    for (int c = 0; c < AudioChannelsCount; ++c) {
+        if (value == AudioChannelKeys[c]) return c;
+    }
+    if (value == "2.0" || value == "2") return AudioStereo;
+    if (value == "6") return Audio51;
+    if (value == "8") return Audio71;
+    return AudioChannelsAuto;
+}
+inline constexpr int MasterVolumeMin = 0, MasterVolumeMax = 200, MasterVolumeDefault = 100;
 
 enum Upscaler : int { UpscalerOff = 0, UpscalerFsr3 = 1, UpscalerFsr4 = 2, UpscalerFsr411 = 3,
                       UpscalerTaa = 4, UpscalerDlss = 5, UpscalerCount };
@@ -72,6 +90,12 @@ struct Values {
     /// Anisotropic filtering forced on mipmapped textures: 0 as the game asks, else 2..16.
     /// Samplers are created as textures are first used: startup_anisotropy is the one in effect.
     std::atomic<int> anisotropy{0};
+    /// Master volume of the game's audio in percent, 0 to 200: above 100 boosts the mix behind a
+    /// soft limiter (src/runtime_audio.c). Read for every buffer.
+    std::atomic<int> master_volume{MasterVolumeDefault};
+    /// Speaker layout of the game's 7.1 audio (AudioChannels). Read when the game opens its
+    /// audio ports, so a change applies from the next start.
+    std::atomic<int> audio_channels{AudioChannelsAuto};
     int startup_anisotropy = 0;
     // Startup: run.py turns them into patches and environment variables; "Apply and restart".
     std::atomic<int> aspect{0}; ///< index into PortGraphics::Aspects

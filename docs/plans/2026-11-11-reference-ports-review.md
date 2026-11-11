@@ -126,3 +126,22 @@ fewer (7/9 vs TOport's 8/10). Accepting that count, all calls apply (`active 7`,
 Picture: the prologue cutscene renders normally with the fix (no visible artefact in a frame
 dump); not compared pixel for pixel (the two dumps caught different moments).
 `THEORDER_PARTICLE_SRT_FIX=0` disables it. The area prefetch is no longer the next step for #113.
+
+## Flicker A/B, prologue cover tutorial (2026-11-11)
+
+Method: `tools/flicker_scan.py` on ~90 consecutive presented frames (`*_FRAME_DUMP_TRIGGER`
+rewritten every 2 ms), A-B-A pattern (a pixel changes for one frame and returns), checked against
+a planted one-frame object (found, 0.31 % of the triple; real scene 0.000). Both ports reach the
+"COVER TRANSFER" tutorial (static camera for over a minute) from the same save: ours at ~50 s,
+TOport at ~60 s, when our profile holds only `savedata` (a full template profile loads another
+point).
+
+| Build | Distinct frames / 90 | ABA, max per triple | Where |
+|---|---|---|---|
+| ours, no patches | 92 | 0.000 % | — |
+| ours, 60 FPS patch | 92 | 0.013 % (every triple) | HUD tutorial text edges (x 1556-1866, y 320-404): half-pixel text shimmer |
+| TOport (30 FPS) | 46 | 0.000 % | — |
+
+No object flicker in this scene in either port. The reported flicker (#95, #99, #29, #30) needs
+scenes this route does not reach (combat, Whitechapel): a save at such a checkpoint is the next
+input. The HUD text shimmer only appears with the 60 FPS patch.

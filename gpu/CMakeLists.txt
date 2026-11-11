@@ -237,6 +237,13 @@ if (WIN32)
         target_include_directories(${test} PRIVATE .. ../src)
         target_link_libraries(${test} PRIVATE atrac9 PkgConfig::FFMPEG bcrypt -pthread)
     endforeach()
+    # PS4 memory manager contracts (tests/test_memory.c includes runtime_memory.c), from SpartanPort.
+    add_executable(memory-test EXCLUDE_FROM_ALL ../tests/test_memory.c ../src/compat_win.c)
+    set_target_properties(memory-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(memory-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_include_directories(memory-test PRIVATE .. ../src)
+    target_link_libraries(memory-test PRIVATE onecore bcrypt -pthread)
+    target_link_options(memory-test PRIVATE -Wl,--disable-high-entropy-va)
     # Guest handles below 1 TiB (runtime_low_alloc), from SpartanPort c8e561a.
     add_executable(low-handles-test EXCLUDE_FROM_ALL ../tests/test_low_handles.c ../src/runtime_memory.c
         ../src/runtime_mutex.c ../src/compat_win.c)

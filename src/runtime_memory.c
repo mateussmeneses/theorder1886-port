@@ -24,17 +24,25 @@
 #include <unistd.h>
 #endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. THEORDER_DMEM_MB raises it (the resolution
- * patches above 1080p need about 4 GiB more; run.sh sets it). */
-static uint64_t g_pool_size;
+ * patches above 1080p need about 4 GiB more; the launcher sets it). pool() falls back to the retail
+ * size when the host refuses the larger pool. */
+#define RETAIL_POOL (UINT64_C(5056) * 1024 * 1024)
+static uint64_t pool_bytes;
 static uint64_t pool_size_bytes(void) {
-    if (!g_pool_size) {
+    uint64_t bytes = __atomic_load_n(&pool_bytes, __ATOMIC_ACQUIRE);
+    if (!bytes) {
         const char *env = getenv("ORDER1886_DMEM_MB");
         if (!env) env = getenv("THEORDER_DMEM_MB");
         uint64_t mb = env ? strtoull(env, NULL, 10) : 0;
         if (mb < 2048 || mb > 16384) mb = 5056;
-        g_pool_size = mb * 1024 * 1024;
+        /* Set once: callers read the size before taking the lock, and a thread that loses this
+         * race must not overwrite pool()'s retail fallback with the refused size. */
+        uint64_t expected = 0;
+        bytes = mb * 1024 * 1024;
+        if (!__atomic_compare_exchange_n(&pool_bytes, &expected, bytes, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            bytes = expected;
     }
-    return g_pool_size;
+    return bytes;
 }
 #define POOL_SIZE pool_size_bytes()
 #define FLEX_SPAN (UINT64_C(1024) * 1024 * 1024)
@@ -162,8 +170,18 @@ void runtime_memory_reserve(void) {
     region_insert(0,(HostRegion){USER_MIN,USER_MAX,0,0});
     pool();
 }
+/* Guest memory committed only as the game maps it: the whole pool did not fit Windows' commit
+ * limit (RAM + page file) at once (pool_create()). */
+static int commit_on_map;
+static void commit_backing(uint64_t phys, uint64_t size) {
+    if (!commit_on_map || VirtualAlloc(backing_base+phys,size,MEM_COMMIT,PAGE_READWRITE)) return;
+    fprintf(stderr,"Runtime: cannot commit %" PRIu64 " MiB of guest memory (error %lu); is the page file large "
+            "enough? Let Windows manage its size, or use a lower output resolution\n",size>>20,GetLastError());
+    win_fail("committing guest memory",(uintptr_t)(backing_base+phys),size);
+}
 static void view_map(const HostRegion *r, DWORD protect) {
     DWORD initial=protect==PAGE_NOACCESS ? PAGE_READWRITE : protect, old;
+    commit_backing(r->phys,r->end-r->start);
     if (!MapViewOfFile3(section,GetCurrentProcess(),(void *)r->start,r->phys,r->end-r->start,MEM_REPLACE_PLACEHOLDER,initial,NULL,0))
         win_fail("MapViewOfFile3",r->start,r->end-r->start);
     if (initial!=protect && !VirtualProtect((void *)r->start,r->end-r->start,protect,&old))
@@ -276,76 +294,95 @@ static int host_protect(uintptr_t address, uint64_t size, int prot) {
     }
     return 0;
 }
-/* Released pages read as zero when reused, like the memfd's punched holes.
- * On Windows, using memset forces physical RAM allocation (working set ballooning).
- * DiscardVirtualMemory / MEM_RESET releases physical frames back to the OS. */
-static void host_discard(uint64_t phys, uint64_t size) {
+/* Whole-pool commit: released pages must read as zero when reused, like the memfd's punched
+ * holes (the game allocates direct memory again and relies on it). DiscardVirtualMemory and
+ * MEM_RESET only make the contents undefined: pages Windows has not trimmed yet kept the old
+ * data, so a reused allocation could read stale command or constant data. Zero them (as
+ * SpartanPort does); this keeps the pages resident until Windows trims them, which costs
+ * working set but not commit (the section is committed at once in this mode). */
+static void host_discard_frames(uint64_t phys, uint64_t size) {
     if (!backing_base || !size) return;
-    typedef DWORD (WINAPI *pfnDiscardVirtualMemory)(PVOID, SIZE_T);
-    static pfnDiscardVirtualMemory pDiscard = NULL;
-    static int initialized = 0;
-    if (!initialized) {
-        HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-        if (hKernel) pDiscard = (pfnDiscardVirtualMemory)GetProcAddress(hKernel, "DiscardVirtualMemory");
-        initialized = 1;
-    }
-    uintptr_t start = (uintptr_t)(backing_base + phys);
-    uintptr_t aligned_start = (start + 4095ULL) & ~4095ULL;
-    uintptr_t end = start + size;
-    uintptr_t aligned_end = end & ~4095ULL;
-    if (aligned_end > aligned_start) {
-        SIZE_T page_bytes = (SIZE_T)(aligned_end - aligned_start);
-        if (!pDiscard || pDiscard((PVOID)aligned_start, page_bytes) != ERROR_SUCCESS) {
-            VirtualAlloc((PVOID)aligned_start, page_bytes, MEM_RESET, PAGE_READWRITE);
-        }
-    }
-    if (aligned_start > start) {
-        memset((void*)start, 0, (size_t)(aligned_start - start));
-    }
-    if (end > aligned_end && aligned_end >= start) {
-        memset((void*)aligned_end, 0, (size_t)(end - aligned_end));
+    memset(backing_base+phys,0,size);
+}
+/* Released pages read as zero when reused, like the memfd's punched holes. With commit-on-map,
+ * pages never committed are zero-filled when first committed: only committed ones are cleared,
+ * so a release does not spend commit charge on memory the game never used. */
+static void host_discard(uint64_t phys, uint64_t size) {
+    if (!commit_on_map) { host_discard_frames(phys,size); return; }
+    for (unsigned char *at=backing_base+phys, *end=at+size; at<end;) {
+        MEMORY_BASIC_INFORMATION m;
+        if (!VirtualQuery(at,&m,sizeof(m))) win_fail("VirtualQuery",(uintptr_t)at,0);
+        unsigned char *next=(unsigned char *)m.BaseAddress+m.RegionSize;
+        if (next>end) next=end;
+        if (m.State==MEM_COMMIT) memset(at,0,(size_t)(next-at));
+        at=next;
     }
 }
+/* Why the last pool_create() failed, for pool()'s final message. */
+static const char *pool_step="create";
+static unsigned long pool_error;
+#define POOL_HINT "is the page file large enough?"
 /* Direct memory occupies [0,POOL_SIZE) of the section, flexible memory [POOL_SIZE,+FLEX_SPAN). */
-static int pool(void) {
+static int pool_create(void) {
     if (backing_base) return 0;
     runtime_memory_reserve();
-    uint64_t dmem = pool_size_bytes();
-    uint64_t bytes = dmem + FLEX_SPAN;
-    while (dmem >= 2048ULL * 1024 * 1024) {
-        bytes = dmem + FLEX_SPAN;
-        section = CreateFileMapping2(INVALID_HANDLE_VALUE, NULL, FILE_MAP_ALL_ACCESS,
-                                     PAGE_EXECUTE_READWRITE, SEC_COMMIT, bytes, NULL, NULL, 0);
+    uint64_t bytes=POOL_SIZE+FLEX_SPAN;
+    const char *fail_env=getenv("THEORDER_FAIL_GUEST_MEMORY");
+    if (fail_env) {
+        DWORD err=fail_env[0] && strcmp(fail_env,"1")!=0 ? (DWORD)strtoul(fail_env,NULL,10) : 1450;
+        SetLastError(err);
+        fprintf(stderr,"Runtime: cannot create %" PRIu64 " MiB of guest memory (error %lu); is the page file large enough?\n",bytes>>20,err);
+        fflush(stderr);
+        exit(21);
+    }
+    /* THEORDER_GUEST_COMMIT_ON_MAP=1: the fallback below from the start, to try it on a machine
+     * where the whole pool fits. */
+    const char *on_map=getenv("THEORDER_GUEST_COMMIT_ON_MAP");
+    if (on_map && on_map[0]=='1') SetLastError(ERROR_COMMITMENT_LIMIT);
+    else section=CreateFileMapping2(INVALID_HANDLE_VALUE,NULL,FILE_MAP_ALL_ACCESS,PAGE_EXECUTE_READWRITE,SEC_COMMIT,bytes,NULL,NULL,0);
+    if (!section && (GetLastError()==ERROR_NO_SYSTEM_RESOURCES || GetLastError()==ERROR_COMMITMENT_LIMIT)) {
+        /* The pool is sized for the largest resolutions (THEORDER_DMEM_MB, up to 16 GiB) and committed
+         * at once it exceeded RAM + page file (error 1450) although the game maps much less: then
+         * it is reserved and committed as the game maps it (commit_backing). */
+        DWORD error=GetLastError();
+        section=CreateFileMapping2(INVALID_HANDLE_VALUE,NULL,FILE_MAP_ALL_ACCESS,PAGE_EXECUTE_READWRITE,SEC_RESERVE,bytes,NULL,NULL,0);
         if (section) {
-            g_pool_size = dmem;
-            break;
-        }
-        DWORD err = GetLastError();
-        printf("CreateFileMapping2 failed for dmem=%" PRIu64 " MiB (bytes=%" PRIu64 " MiB), error %lu\n",
-               dmem >> 20, bytes >> 20, err);
-        if (dmem > 2048ULL * 1024 * 1024) {
-            dmem -= 64ULL * 1024 * 1024;
-        } else {
-            break;
+            commit_on_map=1;
+            printf("Runtime: the %" PRIu64 " MiB guest memory pool does not fit Windows' commit limit at once "
+                   "(error %lu): committed as the game maps it\n",bytes>>20,error);
         }
     }
-    if (!section) {
-        fprintf(stderr,"Runtime: cannot create %" PRIu64 " MiB of guest memory (error %lu); is the page file large enough?\n",bytes>>20,GetLastError());
-        return -1;
-    }
-    printf("Runtime: guest memory pool created: %" PRIu64 " MiB (dmem %" PRIu64 " MiB + flex %" PRIu64 " MiB)\n",
-           bytes >> 20, g_pool_size >> 20, FLEX_SPAN >> 20);
+    if (!section) { pool_step="create"; pool_error=GetLastError(); return -1; }
     backing_base=MapViewOfFile3(section,GetCurrentProcess(),NULL,0,bytes,0,PAGE_READWRITE,NULL,0);
-    return backing_base ? 0 : -1;
+    if (backing_base) {
+        printf("Runtime: guest memory pool created: %" PRIu64 " MiB (dmem %" PRIu64 " MiB + flex %" PRIu64
+               " MiB, %s)\n", bytes>>20, POOL_SIZE>>20, FLEX_SPAN>>20,
+               commit_on_map ? "committed as mapped" : "committed at once");
+        return 0;
+    }
+    pool_step="map"; pool_error=GetLastError();
+    CloseHandle(section); section=NULL; commit_on_map=0;
+    return -1;
 }
 #else
+static const char *pool_step="create";
+static unsigned long pool_error;
+#define POOL_HINT "is /dev/shm or RAM large enough?"
 /* Direct memory occupies [0,POOL_SIZE) of the memfd, flexible memory [POOL_SIZE,+FLEX_SPAN). */
-static int pool(void) {
-    if (pool_fd>=0) return 0;
-    pool_fd=memfd_create("port-guest-memory", MFD_CLOEXEC);
-    if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) return -1;
+static int pool_create(void) {
+    if (backing_base) return 0;
+    const char *fail_env=getenv("THEORDER_FAIL_GUEST_MEMORY");
+    if (fail_env) {
+        int err=fail_env[0] && strcmp(fail_env,"1")!=0 ? (int)strtol(fail_env,NULL,10) : 12;
+        fprintf(stderr,"Runtime: cannot create %" PRIu64 " MiB of guest memory (error %d); is /dev/shm or RAM large enough?\n",
+                (POOL_SIZE+FLEX_SPAN)>>20,err);
+        fflush(stderr);
+        exit(21);
+    }
+    if (pool_fd<0) pool_fd=memfd_create("port-guest-memory", MFD_CLOEXEC);
+    if (pool_fd<0 || ftruncate(pool_fd,(off_t)(POOL_SIZE+FLEX_SPAN))) { pool_step="create"; pool_error=(unsigned long)errno; return -1; }
     void *view=mmap(NULL,POOL_SIZE+FLEX_SPAN,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_NORESERVE,pool_fd,0);
-    if (view==MAP_FAILED) return -1;
+    if (view==MAP_FAILED) { pool_step="map"; pool_error=(unsigned long)errno; return -1; }
     backing_base=view;
     return 0;
 }
@@ -362,6 +399,28 @@ static void host_discard(uint64_t phys, uint64_t size) {
     fallocate(pool_fd,FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,(off_t)phys,(off_t)size);
 }
 #endif
+/* A pool larger than the PS4's (THEORDER_DMEM_MB) that the host refuses (Windows error 1450 on
+ * some laptops) falls back to the retail 5056 MiB instead of stopping the game; resolutions that
+ * need the larger pool may then run out of direct memory. When the retail pool fails too, the
+ * game stops with exit code 21 and the message the launcher recognises. Called with the write
+ * lock held. THEORDER_TEST_REFUSE_DMEM=1 refuses the larger pool (tests). */
+static int pool(void) {
+    if (backing_base) return 0;
+    const char *refuse=getenv("THEORDER_TEST_REFUSE_DMEM");
+    int refused=refuse && refuse[0]=='1' && POOL_SIZE>RETAIL_POOL;
+    if (!refused && !pool_create()) return 0;
+    if (POOL_SIZE>RETAIL_POOL) {
+        printf("Runtime: the host refused %" PRIu64 " MiB of direct memory (THEORDER_DMEM_MB); falling back to "
+               "the PS4's 5056 MiB. High output resolutions may run out of memory: lower the output "
+               "resolution if the game stops\n",POOL_SIZE>>20);
+        __atomic_store_n(&pool_bytes,RETAIL_POOL,__ATOMIC_RELEASE);
+        if (!pool_create()) return 0;
+    }
+    fprintf(stderr,"Runtime: cannot %s %" PRIu64 " MiB of guest memory (error %lu); " POOL_HINT "\n",
+            pool_step,(POOL_SIZE+FLEX_SPAN)>>20,pool_error);
+    fflush(stderr);
+    exit(21);
+}
 static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     GpuRange hook = kind==HOOK_MAP ? hook_map : kind==HOOK_UNMAP ? hook_unmap : hook_invalidate;
     if (!hook) return;
@@ -421,7 +480,7 @@ static int split_at(uintptr_t a) {
     if (i==vma_count || vmas[i].start>=a) return 0;
     Vma right=vmas[i];
     right.start=a;
-    if (right.kind==KIND_DIRECT) right.phys+=a-vmas[i].start;
+    if (right.kind!=KIND_RESERVED) right.phys+=a-vmas[i].start;
     vmas[i].end=a;
     return vma_insert(i+1,right);
 }
@@ -499,21 +558,25 @@ static int direct_range_allocated(uint64_t phys, uint64_t size) {
     return 1;
 }
 
-static ABI uint64_t direct_size(void) { return POOL_SIZE; }
+/* The pool is created first so that the size reported is the one the host granted. */
+static ABI uint64_t direct_size(void) {
+    write_lock();
+    pool();
+    uint64_t size=POOL_SIZE;
+    write_unlock();
+    return size;
+}
 static ABI int32_t direct_allocate(int64_t low, int64_t high, uint64_t size,
                                   uint64_t alignment, int type, int64_t *out) {
     if (!alignment) alignment = PAGE;
     if (!out || low < 0 || high < 0 || !size || size % PAGE || !valid_alignment(alignment) || type < 0 || type > 10)
         return INVALID;
-    uint64_t end = align_up((uint64_t)high, PAGE);
-    if (end > POOL_SIZE) end = POOL_SIZE;
-    if ((uint64_t)low >= end || size > end - (uint64_t)low) {
-        printf("direct_allocate early reject: low=0x%llx, high=0x%llx, end=0x%llx, size=0x%llx, POOL_SIZE=0x%llx\n",
-               (unsigned long long)low, (unsigned long long)high, (unsigned long long)end, (unsigned long long)size, (unsigned long long)POOL_SIZE);
-        return NO_SPACE;
-    }
     write_lock();
     if (pool()) { write_unlock(); return NO_MEMORY; }
+    /* After pool(): the pool may have fallen back to the retail size. */
+    uint64_t end = align_up((uint64_t)high, PAGE);
+    if (end > POOL_SIZE) end = POOL_SIZE;
+    if ((uint64_t)low >= end || size > end - (uint64_t)low) { write_unlock(); return NO_SPACE; }
     uint64_t start = align_up((uint64_t)low, alignment);
     int slot = -1;
     for (int i=0; i<LIMIT; ++i) if (!blocks[i].used) { slot=i; break; }

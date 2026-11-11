@@ -237,6 +237,13 @@ if (WIN32)
         target_include_directories(${test} PRIVATE .. ../src)
         target_link_libraries(${test} PRIVATE atrac9 PkgConfig::FFMPEG bcrypt -pthread)
     endforeach()
+    # Memory another program holds in the PS4 range at start-up (SpartanPort #1075).
+    add_executable(memory-reserve-test EXCLUDE_FROM_ALL ../tests/test_memory_reserve.c ../src/compat_win.c)
+    set_target_properties(memory-reserve-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    target_compile_options(memory-reserve-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_include_directories(memory-reserve-test PRIVATE .. ../src)
+    target_link_libraries(memory-reserve-test PRIVATE onecore bcrypt -pthread)
+    target_link_options(memory-reserve-test PRIVATE -Wl,--disable-high-entropy-va)
     # PS4 memory manager contracts (tests/test_memory.c includes runtime_memory.c), from SpartanPort.
     add_executable(memory-test EXCLUDE_FROM_ALL ../tests/test_memory.c ../src/compat_win.c)
     set_target_properties(memory-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)

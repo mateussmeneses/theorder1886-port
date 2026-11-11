@@ -76,7 +76,15 @@ int compat_cpu_times(int who, int64_t *user_us, int64_t *kernel_us);
  * Win64 callee-saved register, xmm6-15 included. clang's __builtin_longjmp restores a wrong
  * frame pointer on Win64. port_longjmp may also be entered from the exception handler. */
 typedef unsigned long long port_jmp_buf[32];
+/* C linkage also when force-included into C++ tests (gpu/shim/port_toggles.h declares
+ * port_setjmp extern "C"); compat_win.c defines them in C. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 __attribute__((returns_twice)) int port_setjmp(port_jmp_buf buffer);
 __attribute__((noreturn)) void port_longjmp(port_jmp_buf buffer, int value);
+#ifdef __cplusplus
+}
+#endif
 #endif
 #endif

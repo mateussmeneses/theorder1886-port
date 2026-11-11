@@ -99,7 +99,7 @@ public:
         return worker_count != 0;
     }
 
-    /// spartanport: true on a draw-preparation worker thread (read by the guest fault handler).
+    /// port: true on a draw-preparation worker thread (read by the guest fault handler).
     [[nodiscard]] static bool OnWorkerThread() noexcept;
 
     struct Submission;

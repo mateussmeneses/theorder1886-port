@@ -152,13 +152,14 @@ static void test_secondary_port_failure_leaves_active_stream_intact(void) {
     int32_t h0 = audio_open(0, 0, 0, 256, 48000, 5);
     assert(h0 > 0);
     int id0 = h0 & 0xff;
-    assert(!strcmp(SDL_GetCurrentAudioDriver(), "wasapi"));
     if (!ports[id0].stream) {
-        /* port: no playback device (CI runner): there is no active stream to keep intact. */
+        /* port: no playback device (CI runner): WASAPI failed on its own and the fallback already
+           ran, so there is no active stream to keep intact. */
         assert(audio_close(h0) == 0);
         printf("No playback device: secondary port test skipped\n");
         return;
     }
+    assert(!strcmp(SDL_GetCurrentAudioDriver(), "wasapi"));
 
     test_open_stream = mock_fail_port8;
 

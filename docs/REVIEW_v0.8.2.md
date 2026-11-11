@@ -45,6 +45,8 @@ Spec:
 ## Gates
 
 `build.sh` OK; `tools/run_tests.sh` (CLANG64): 59 native tests + Python suite pass. Packaged
-build smoke: see the release section below.
+build (`dist/theorder1886-windows.zip`, built with the WIP stashed, sha256 e5ace555...4381) run
+through `The Order 1886.exe --run` on CUSA00035 with Portuguese selected: fallback logged, menu
+and prologue reached (up to 650 draws/frame), RAM guard log present, no fault.
 
 No P0 open. Decision: release v0.8.2 with the items above stated in the notes.

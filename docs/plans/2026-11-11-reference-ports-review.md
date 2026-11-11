@@ -90,3 +90,19 @@ Three local fixes were needed with this MSYS2 (none affects B's code paths): clo
 path with `core.longpaths` (FSR generated headers exceed MAX_PATH), our
 `gpu/patches/fsr-vulkan/0003-ffx-sdk-include-libc-headers.patch`, `<cstdlib>` in sirit
 `stream.h`, and `-Wno-unused-but-set-global` (newer clang).
+
+## After v0.8.2: why TOport meets fewer new pipelines (2026-11-11)
+
+- TOport's permutation trace (`BB_PERM_TRACE`) only logs the synchronous path, so its "1 new
+  permutation" in a session is not comparable; the specialization fields, directional matching
+  and implausible-T# filter are the same in both ports (`specialization.h`).
+- What differs is *when* combinations are met: TOport compiles ~700 in its first session and
+  ~8 later; it prepares programs long before their first use (`Disk program ready: ...
+  prepared 36349 ms before use`, area prefetch from the package being streamed). Ours meets
+  ~40 unseen combinations in every later session (none repeated).
+- The area prefetch is portable here: the three Oodle entry points it calls match byte for byte
+  in our CUSA00035 01.02 eboot (prologues at +0xe804d0 create, +0xe80600 free, +0xe80640 decode;
+  checked on `out/eboot.elf`). TOport refuses to run them when a prologue differs.
+- Next step: port the package index (`runtime_oodle_index.c`) and the area prefetch
+  (`vk_pipeline_cache.cpp` a5327ef) behind `THEORDER_AREA_PREFETCH`, off by default, and
+  measure session 2/3 hitch windows A/B on the prologue route.

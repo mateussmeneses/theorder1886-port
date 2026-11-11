@@ -460,6 +460,14 @@ target_link_libraries(blend-rewrite-test PRIVATE Vulkan::Headers fmt::fmt Boost:
 if(NOT WIN32)
     set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
 endif()
+add_executable(guest-memory-test EXCLUDE_FROM_ALL ../tests/test_guest_memory.cpp)
+target_compile_options(guest-memory-test PRIVATE -UNDEBUG)
+target_include_directories(guest-memory-test PRIVATE shim)
+if (WIN32)
+    target_sources(guest-memory-test PRIVATE ../src/compat_win.c)
+    target_link_libraries(guest-memory-test PRIVATE onecore bcrypt)
+endif()
+
 add_executable(particle-srt-test EXCLUDE_FROM_ALL ../tests/test_particle_srt.cpp)
 target_compile_options(particle-srt-test PRIVATE -UNDEBUG)
 target_include_directories(particle-srt-test PRIVATE shim)
@@ -535,12 +543,18 @@ target_compile_options(async-pipeline-cache-test PRIVATE -UNDEBUG)
 target_include_directories(async-pipeline-cache-test PRIVATE shadps4)
 target_link_libraries(async-pipeline-cache-test PRIVATE Vulkan::Vulkan)
 add_executable(async-fetch-snapshot-test EXCLUDE_FROM_ALL ../tests/test_async_fetch_snapshot.cpp
+    ../tests/test_gpu_runtime_stubs.cpp
     shadps4/shader_recompiler/frontend/fetch_shader.cpp
     shadps4/shader_recompiler/frontend/decode.cpp
     shadps4/shader_recompiler/frontend/format.cpp)
 target_compile_options(async-fetch-snapshot-test PRIVATE -UNDEBUG)
 target_include_directories(async-fetch-snapshot-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(async-fetch-snapshot-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
+if (WIN32)
+    # port_setjmp for the guarded descriptor reads (gpu/shim/port_guest_memory.h).
+    target_sources(async-fetch-snapshot-test PRIVATE ../src/compat_win.c)
+    target_link_libraries(async-fetch-snapshot-test PRIVATE onecore bcrypt)
+endif()
 target_compile_options(depth-stencil-state-test PRIVATE -UNDEBUG)
 target_include_directories(depth-stencil-state-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(depth-stencil-state-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
@@ -621,3 +635,12 @@ add_executable(fsr4-bench EXCLUDE_FROM_ALL tools/fsr4_bench.cpp
     shadps4/video_core/renderer_vulkan/fsr411/fsr411.cpp)
 target_include_directories(fsr4-bench PRIVATE shadps4/video_core/renderer_vulkan/fsr411)
 target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan::fsr4-v07-assets Vulkan::Vulkan)
+
+# port: renderer tests that link theordergpu with the runtime stubs reach the guarded guest
+# descriptor reads (gpu/shim/port_guest_memory.h), whose recovery point is port_setjmp.
+if (WIN32)
+    foreach(test buffer-addr64-test buffer-inline-test camera-motion-test compute-pipeline-reuse-test formatted-ssbo-barriers-test indirect-index-clamp-gpu-test motion-shader-test multiwave-barriers-test overlay-input-test scene-resolution-test shader-resource-test taa-shader-test)
+        target_sources(${test} PRIVATE ../src/compat_win.c)
+        target_link_libraries(${test} PRIVATE onecore)
+    endforeach()
+endif()

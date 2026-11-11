@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <boost/container/flat_map.hpp>
@@ -13,6 +16,7 @@
 #include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/signal_context.h"
+#include "common/try_emit.h"
 #include "core/emulator_settings.h"
 #include "core/signals.h"
 #include "port_toggles.h"
@@ -23,6 +27,7 @@
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/ir/reg.h"
 #include "shader_recompiler/ir/srt_gvn_table.h"
+#include "shader_recompiler/ir/srt_resource_use.h"
 #include "shader_recompiler/ir/value.h"
 
 #ifdef ARCH_X86_64
@@ -682,6 +687,65 @@ static inline void PopPtr(Xbyak::CodeGenerator& c) {
     c.pop(rdi);
 }
 
+// port: a resource-table lookup the walker cannot compute used to keep flat buffer offset 0, so
+// the shader read user data register 0 (usually a pointer) as part of a descriptor: plausible
+// garbage T#s/V#s (junk or shattered textures, extra permutations). A lookup that reaches a
+// descriptor operand now gets its own zeroed slot, which reads as a null descriptor; data lookups
+// keep the previous path. A failed emission is also rolled back (Common::TryEmit), so a pointer
+// push whose offset could not be computed no longer leaves the walker's stack unbalanced.
+// THEORDER_SRT_GARBAGE=1 restores the old behaviour (A/B). Ported from TOport
+// (IgorAugustoHH/The-Order-1886-PC-Port, flatten_extended_userdata_pass.cpp, BB_SRT_GARBAGE).
+static bool ZeroUnresolved() {
+    static const bool zero = [] {
+        const char* env = std::getenv("THEORDER_SRT_GARBAGE");
+        return !(env && env[0] == '1');
+    }();
+    return zero;
+}
+
+static thread_local u64 g_srt_shader_hash = 0;
+static std::atomic<u32> g_srt_unresolved_descriptors{0}, g_srt_unresolved_data{0};
+
+static void NoteUnresolved(const IR::Inst* use, bool descriptor) {
+    const u32 d = descriptor ? ++g_srt_unresolved_descriptors : g_srt_unresolved_descriptors.load();
+    const u32 v = descriptor ? g_srt_unresolved_data.load() : ++g_srt_unresolved_data;
+    if (d + v <= 48 || (d + v) % 256 == 0) {
+        std::printf("SRT unresolved lookup: shader %016llx %s (%s); totals %u descriptor, %u data\n",
+                    static_cast<unsigned long long>(g_srt_shader_hash),
+                    descriptor ? "descriptor" : "data",
+                    descriptor && ZeroUnresolved() ? "null slot" : "user data 0",
+                    d, v);
+        std::fflush(stdout);
+    }
+}
+
+static void ZeroFillSlot(IR::Inst* use, PassInfo& pass_info, Xbyak::CodeGenerator& c) {
+    const bool descriptor = Shader::Optimization::SrtFeedsDescriptor(use);
+    NoteUnresolved(use, descriptor);
+    if (!descriptor || !ZeroUnresolved()) {
+        return;
+    }
+    c.mov(dword[rsi + (pass_info.dst_off_dw << 2)], 0);
+    SetFlatbufOffset(use, pass_info.dst_off_dw);
+    pass_info.dst_off_dw++;
+}
+
+/// Every value read through `subtree` (a pointer whose own offset is unknown) is unresolved.
+static void ZeroFillSubtree(IR::Inst* subtree, PassInfo& pass_info, Xbyak::CodeGenerator& c) {
+    PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
+    if (!use_list) {
+        return;
+    }
+    for (auto [src_off_dw, use] : *use_list) {
+        ZeroFillSlot(use, pass_info, c);
+    }
+    for (const auto [src_off_dw, use] : *use_list) {
+        if (pass_info.GetUsesAsPointer(use)) {
+            ZeroFillSubtree(use, pass_info, c);
+        }
+    }
+}
+
 static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& pass_info,
                          Xbyak::CodeGenerator& c) {
     if (subtree->GetOpcode() == IR::Opcode::ReadConst && subtree->Flags<u16>() == 0 ||
@@ -690,8 +754,9 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
         return;
     }
 
-    if (!PushPtr(c, pass_info, off_dw)) {
+    if (!Common::TryEmit(c, [&] { return PushPtr(c, pass_info, off_dw); })) {
         LOG_DEBUG(Render_Recompiler, "Failed to compute offset for SRT walker");
+        ZeroFillSubtree(subtree, pass_info, c);
         return;
     }
     PassInfo::PtrUserList* use_list = pass_info.GetUsesAsPointer(subtree);
@@ -706,8 +771,9 @@ static void VisitPointer(const IR::Value& off_dw, IR::Inst* subtree, PassInfo& p
         if (src_off_dw.IsImmediate()) {
             c.mov(r10d, ptr[rdi + (src_off_dw.U32() << 2)]);
         } else {
-            if (!ComputeOffset(c, r10d, pass_info, src_off_dw)) {
+            if (!Common::TryEmit(c, [&] { return ComputeOffset(c, r10d, pass_info, src_off_dw); })) {
                 LOG_DEBUG(Render_Recompiler, "Failed to compute offset for SRT walker");
+                ZeroFillSlot(use, pass_info, c);
                 continue;
             }
             c.shl(r10d, 2);
@@ -748,6 +814,7 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     }
 
     const size_t walker_start = c.getSize();
+    g_srt_shader_hash = info.pgm_hash;
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
     ASSERT(pass_info.dst_off_dw == info.srt_info.flattened_bufsize_dw);

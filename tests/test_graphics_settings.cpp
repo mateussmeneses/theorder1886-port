@@ -198,6 +198,12 @@ int main() {
         }
         S::Load();
         assert(v.master_volume == 100);
+        {
+            std::ofstream out(path);
+            out << "master_volume=abc\n"; // not a number: the game's own level, not silence
+        }
+        S::Load();
+        assert(v.master_volume == 100);
         SetEnv("THEORDER_AUDIO_VOLUME", "80");
         SetEnv("THEORDER_AUDIO_CHANNELS", "stereo");
         S::Load();

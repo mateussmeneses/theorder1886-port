@@ -89,7 +89,7 @@ static int port_range(int type, int *first, int *last) {
 #endif
 #define PEAK_REPORTS 10   /* reports per port: the first half minute of the game */
 
-/* Speaker layouts a 7.1 port can be sent to (theorder.ini audio_channels, menu "Speakers"). */
+/* Speaker layouts a 7.1 port can be sent to (theorder.ini audio_channels, THEORDER_AUDIO_CHANNELS). */
 enum { OUT_STEREO=2, OUT_51=6, OUT_71=8 };
 enum { MODE_AUTO=0, MODE_STEREO=1, MODE_51=2, MODE_71=3 }; /* theordergpu_audio_channels() */
 
@@ -106,7 +106,7 @@ static int output_channels(int mode, int device) {
 }
 static const char *layout_name(int channels) { return channels==OUT_STEREO ? "stereo" : channels==OUT_51 ? "5.1" : "7.1"; }
 
-/* The menu's master volume, 0 to 200 percent, as a gain. */
+/* The master volume (theorder.ini master_volume, THEORDER_AUDIO_VOLUME), 0 to 200 percent, as a gain. */
 static float master_gain(void) {
     int percent=theordergpu_audio_volume_percent();
     return (float)(percent<0 ? 0 : percent>200 ? 200 : percent)/100.0f;
@@ -421,9 +421,11 @@ static ABI int32_t audio_state(int32_t handle, PortState *state) {
     case 2: case 3: state->output=0x40; state->channel=1; break;          /* headphone */
     case 4: state->output=0x04; state->channel=1; state->volume=127; break; /* pad speaker */
     default:
-        /* The channel count of the output: a game that asks (FMOD does) mixes for it, so a 5.1 or 7.1
-           device has to say so, or the game keeps its surround channels empty. */
-        state->output=0x01; state->channel=(uint8_t)(p->channels>2 ? p->out_channels : p->channels); break;
+        /* The channel count of the output: a game that asks mixes for it, so a 5.1 or 7.1 device has
+           to say so, or the game may keep its surround channels empty (The Order's Wwise queries it
+           once). Without a stream (no device, THEORDER_AUDIO=none) stereo, as before. */
+        state->output=0x01;
+        state->channel=(uint8_t)(p->channels>2 ? (p->stream ? p->out_channels : 2) : p->channels); break;
     }
     if (!p->state_logged) {
         p->state_logged=1;

@@ -184,6 +184,7 @@ static size_t run_port(const char *dump, int mode, int volume, const float *fram
 }
 static void test_end_to_end(void) {
     const char *dump="theorder_audio_test_dump"; /* in the working directory; each run removes its file */
+    set_env("SDL_AUDIO_DRIVER","dummy"); /* SDL3 name */
     set_env("SDL_AUDIODRIVER","dummy");
     set_env("THEORDER_AUDIO_DUMP",dump);
     assert(audio_init()==0);

@@ -2,6 +2,7 @@
 #include "port_settings.h"
 #include "port_graphics.h"
 
+#include <cctype>
 #include <algorithm>
 #include <vector>
 #include <cstdio>
@@ -132,8 +133,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "fsr4_invert_jitter") {
         v.fsr4_invert_jitter = i != 0;
     } else if (key == "master_volume") {
-        v.master_volume = value.empty() ? MasterVolumeDefault
-                                        : std::clamp(i, MasterVolumeMin, MasterVolumeMax);
+        // Not a number (or empty): the game's own level, never a silent game.
+        const bool numeric = !value.empty() && (std::isdigit(static_cast<unsigned char>(value[0])) ||
+                                                ((value[0] == '-' || value[0] == '+') && value.size() > 1 &&
+                                                 std::isdigit(static_cast<unsigned char>(value[1]))));
+        v.master_volume = numeric ? std::clamp(i, MasterVolumeMin, MasterVolumeMax) : MasterVolumeDefault;
     } else if (key == "audio_channels") {
         v.audio_channels = ParseAudioChannels(value);
     } else if (key == "live_resolution") {

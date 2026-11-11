@@ -39,6 +39,9 @@ public:
     bool Failed() const noexcept {
         return !pipeline;
     }
+    bool IsValid() const noexcept {
+        return static_cast<bool>(pipeline);
+    }
 
     vk::PipelineLayout GetLayout() const noexcept {
         return *pipeline_layout;

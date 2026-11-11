@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+// port: declare the exception type caught during speculative specialization.
+#include <exception>
 #include <mutex>
 #include <ranges>
 #include <string>
@@ -1051,6 +1053,12 @@ void PipelineCache::PublishGraphics(bool wait) {
             continue;
         }
         const auto key = it.key();
+        // port: keep a null refusal marker; do not publish stages or save a failed key.
+        if (!build->pipeline || !build->pipeline->IsValid()) {
+            graphics_pipelines.try_emplace(key);
+            it = pending_graphics.erase(it);
+            continue;
+        }
         build->pipeline->PublishStages(build->live_infos);
         RegisterPipelineData(key, std::hash<GraphicsPipelineKey>{}(key), build->data);
         graphics_pipelines.emplace(key, std::move(build->pipeline));
@@ -1146,6 +1154,13 @@ void PipelineCache::PublishCompute(bool wait) {
         }
         if (!build->job.Poll()) {
             ++it;
+            continue;
+        }
+        // port: a pipeline the driver refused (null handle) stays out of the disk store; an
+        // empty marker makes later dispatches skip it instead of binding VK_NULL_HANDLE.
+        if (!build->pipeline || !build->pipeline->IsValid()) {
+            compute_pipelines.emplace(build->key, nullptr);
+            it = pending_compute.erase(it);
             continue;
         }
         build->pipeline->PublishStage(build->live_info);
@@ -1619,7 +1634,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         if (found->second && !found->second->hot_noted) {
             NoteHot(*found->second, 'c', compute_key.value);
         }
-        return found->second.get();
+        return found->second && found->second->IsValid() ? found->second.get() : nullptr;
     }
     const bool can_async = SkippableDispatch(*sel.infos[0]) && AsyncCompilation() &&
                            !EmulatorSettings.IsShaderCollect() &&
@@ -2175,6 +2190,19 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     }
 
     const auto* vs_info = sel.infos[static_cast<u32>(SwStage::Vertex)];
+    // port: a draw with no vertex table has no input to build; skip before format lookup.
+    if (vs_info && sel.fetch_shader) {
+        for (const auto& attrib : sel.fetch_shader->attributes) {
+            if (vs_info->UdPointerNull(attrib.sgpr_base)) {
+                static std::atomic<u32> reported{0};
+                if (!sel.worker && reported.fetch_add(1, std::memory_order_relaxed) < 5) {
+                    LOG_WARNING(Render_Vulkan,
+                                "Draw skipped: its vertex buffer table pointer is null or short");
+                }
+                return false;
+            }
+        }
+    }
     if (vs_info && sel.fetch_shader && !instance.IsVertexInputDynamicState()) {
         // Without vertex input dynamic state, the pipeline needs to specialize on format.
         // Stride will still be handled outside the pipeline using dynamic state.
@@ -2278,9 +2306,24 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
             return {};
         }
         runtime_fault_recover = &recover;
-        info.RefreshFlatBuf();
-        if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(info);
-        auto spec = Shader::StageSpecialization(info, runtime_info, profile, binding);
+        // port (SpartanPort c22329f): torn guest data can throw; abandon preparation like a
+        // fault, without changing the non-unwinding fault jump out of this try block.
+        std::optional<Shader::StageSpecialization> spec_slot;
+        try {
+            info.RefreshFlatBuf();
+            if (BbParticleSrt::Enabled()) BbParticleSrt::Normalize(info);
+            spec_slot.emplace(info, runtime_info, profile, binding);
+        } catch (const std::exception& e) {
+            runtime_fault_recover = nullptr;
+            static std::atomic<u32> logged{0};
+            if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+                LOG_WARNING(Render_Vulkan, "Draw preparation ahead of the GPU thread stopped: {}",
+                            e.what());
+            }
+            worker.failed = true;
+            return {};
+        }
+        auto& spec = *spec_slot;
         runtime_fault_recover = nullptr;
         const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
         if (it == program->modules.end() || !it->module) { // a deferred module loads on stage A

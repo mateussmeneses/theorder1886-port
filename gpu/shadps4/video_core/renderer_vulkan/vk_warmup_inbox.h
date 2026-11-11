@@ -62,6 +62,10 @@ private:
 /// game compiled the same one (or the reverse) is dropped. True when `value` was stored.
 template <typename Map, typename Key, typename Value>
 bool PublishFirst(Map& map, const Key& key, Value&& value) {
+    // port: only usable pipelines can win publication; keep null runtime refusal markers.
+    if (!value || !value->IsValid()) {
+        return false;
+    }
     return map.try_emplace(key, std::forward<Value>(value)).second;
 }
 

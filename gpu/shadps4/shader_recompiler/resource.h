@@ -258,8 +258,10 @@ struct ImageResource {
             return 1;
         }
         const AmdGpu::Image tsharp = GetSharp(info);
-        return tsharp.last_level >= tsharp.base_level ? (tsharp.last_level - tsharp.base_level + 1)
-                                                      : 1;
+        // Clamped to the levels the image has, as Rasterizer::BindTextures does (keep in step:
+        // this count is part of the shader specialization).
+        const u32 last = std::min<u32>(static_cast<u32>(tsharp.last_level), tsharp.NumLevels() - 1);
+        return last >= tsharp.base_level ? (last - static_cast<u32>(tsharp.base_level) + 1) : 1;
     }
 };
 using ImageResourceList = boost::container::static_vector<ImageResource, NUM_IMAGES>;

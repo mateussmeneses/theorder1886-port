@@ -3042,11 +3042,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         const Shader::MipStorageFallbackMode mip_fallback_mode = image_desc.mip_fallback_mode;
-        // Same as image_desc.NumBindings(stage), without fetching the T# again.
+        // Same as image_desc.NumBindings(stage), without fetching the T# again. The last level is
+        // clamped to the levels the image has (NumLevels clamps a T# declaring more than its
+        // extent's mip chain): one view per existing level, never past the end.
+        const u32 fallback_last =
+            std::min<u32>(static_cast<u32>(tsharp.last_level), tsharp.NumLevels() - 1);
         const u32 num_bindings =
             (mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex &&
-             tsharp.last_level >= tsharp.base_level)
-                ? static_cast<u32>(tsharp.last_level - tsharp.base_level + 1)
+             fallback_last >= tsharp.base_level)
+                ? fallback_last - static_cast<u32>(tsharp.base_level) + 1
                 : 1u;
         const bool proxy_candidate = sample_proxies && num_bindings == 1 &&
                                      !image_desc.needs_native && !image_desc.is_written &&

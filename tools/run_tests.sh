@@ -5,7 +5,7 @@
 set -uo pipefail
 cd -- "$(dirname -- "$0")/.."
 [[ -f msys2-env.sh && $(uname -s) == MINGW* || $(uname -s) == MSYS* ]] && source ./msys2-env.sh
-tests=(mp3 videodec services pad-map pad audio-downmix cpu-check isa-emulate isa-stub tsc-clock task-idle
+tests=(mp3 videodec services low-handles pad-map pad audio-downmix cpu-check isa-emulate isa-stub tsc-clock task-idle
        pipeline-binary-cache pipeline-binary-trim pipeline-binary-initialization motion-history motion-shader buffer-addr64 buffer-inline png-decode
        aliasing blend-rewrite depth-stencil-state depth-alias-copy htile-expand serdes-damaged try-emit particle-srt face-workers-guard async-compiler warmup-inbox wave-stats pass-census
        frame-capture lighting-test-knob amd-paths no-msaa async-pipeline-cache pending-builds async-fetch-snapshot
@@ -16,7 +16,7 @@ tests=(mp3 videodec services pad-map pad audio-downmix cpu-check isa-emulate isa
 if [[ $(uname -s) != MINGW* && $(uname -s) != MSYS* ]]; then
     # the runtime loader suites link ../src/compat_win.c and gpu/CMakeLists.txt registers
     # them only under WIN32; skip them on other platforms.
-    win_only=(mp3 videodec services pad-map pad audio-downmix cpu-check isa-emulate isa-stub tsc-clock task-idle)
+    win_only=(mp3 videodec services low-handles pad-map pad audio-downmix cpu-check isa-emulate isa-stub tsc-clock task-idle)
     filtered=()
     for name in "${tests[@]}"; do
         keep=1

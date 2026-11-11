@@ -1447,6 +1447,13 @@ int main(int argc, char **argv) {
         runtime_set_main_tls(image+main_tls[0],main_tls[1],main_tls[2],main_tls[3]);
         runtime_thread_attach_main();
         runtime_orbis_fpu(); /* the PS4's floating-point state from the first guest code on */
+#if defined(__x86_64__)
+        {
+            uint32_t mxcsr=0;
+            __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+            printf("Runtime: guest FPU state MXCSR %#x (PS4: 0x9fc0, flush-to-zero and denormals-are-zero)\n",mxcsr);
+        }
+#endif
         runtime_set_procparam(image+procparam);
         /* Dependencies start in link order (libc first), as the PS4 dynamic linker does. */
         for (uint64_t m=0;m<module_count;++m) {

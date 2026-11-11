@@ -266,3 +266,13 @@ Relatos do usuário no teste (feito no pacote v0.8.0, cache frio) e o que já se
 - Defeito achado no caminho (`b21abad`): o fallback PT-BR → PT-PT nunca disparava (comparava o
   caminho do XML com o ID do título), então português nas SKUs sem PT-BR recebia o idioma 17.
 - Ferramenta: as prévias das capturas do build atual saem com R e B trocados (T1).
+
+### 2026-11-10 — F3/F4 progresso
+- F3 (fumaça, Always a Knight → The Atrium): roteiro fechado (`out/ctl/atrium.py`, navegação verificada por imagem).
+  Burst logo após R2 mostra a granada em voo (frame b0); nos 10 s seguintes nenhuma fumaça aparece.
+  Mesmo resultado com `THEORDER_PARTICLE_SRT_FIX=0` e na build v0.7.9 → defeito antigo, não regressão da 0.8.x.
+  Captura completa 2,5 s após o lançamento: `out/ctl/capture/frame_20261110-231609_1.txt` (96 draws) — próximo passo:
+  localizar o passe de partículas/volumétrico e comparar com um frame sem granada.
+- F4 (legendas): `sub_3096d0` (CreateSubtitle) busca o filme Iggy da legenda numa lista ordenada
+  (hud+0x48, count +0x70, chave em 0x16b6fd0) e retorna em silêncio se não achar. Rastreio `[SUB-MOVIE]`
+  adicionado só no worktree dev (WIP local, não commitar) para confirmar se o filme está carregado.

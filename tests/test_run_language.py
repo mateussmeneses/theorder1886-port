@@ -109,20 +109,29 @@ class EngineLanguageTest(unittest.TestCase):
     def test_missing_language_package_falls_back_to_english(self):
         # CUSA00035 01.02 ships neither Portuguese package: both boot to a black screen.
         game = self.make_dump()
-        self.assertEqual(run.available_language(17, 7, game), (1, 0))
-        self.assertEqual(run.available_language(17, 17, game), (1, 0))
+        self.assertEqual(run.available_language(17, 7, game, 'CUSA00035'), (1, 0))
+        self.assertEqual(run.available_language(17, 17, game, 'CUSA00035'), (1, 0))
 
     def test_pt_br_without_its_package_uses_pt_pt_when_present(self):
         game = self.make_dump(run.LANGUAGE_PACKAGES[7])
-        self.assertEqual(run.available_language(17, 17, game), (17, 7))
-        self.assertEqual(run.available_language(17, 7, game), (17, 7))
+        self.assertEqual(run.available_language(17, 17, game, 'CUSA00076'), (17, 7))
+        self.assertEqual(run.available_language(17, 7, game, 'CUSA00076'), (17, 7))
+
+    def test_fails_open_where_the_ids_were_not_measured(self):
+        game = self.make_dump()
+        # CUSA00785 has PT-BR assets; its package IDs are unknown: never switch it.
+        self.assertEqual(run.available_language(17, 17, game, 'CUSA00785'), (17, 17))
+        self.assertEqual(run.available_language(17, 7, game, None), (17, 7))
+        # Another folder layout, or not an unpacked dump: nothing is checked.
+        other = Path(self.temp_dir.name) / 'other'
+        (other / '_data' / 'x' / 'ps4' / 'primary' / 'feedbeef00000000' / 'v1').mkdir(parents=True)
+        self.assertEqual(run.available_language(17, 7, other, 'CUSA00035'), (17, 7))
+        self.assertEqual(run.available_language(17, 7, Path(self.temp_dir.name), 'CUSA00035'), (17, 7))
 
     def test_present_package_and_unknown_languages_are_kept(self):
         game = self.make_dump(run.LANGUAGE_PACKAGES[17])
-        self.assertEqual(run.available_language(17, 17, game), (17, 17))
-        self.assertEqual(run.available_language(2, 2, self.make_dump()), (2, 2))
-        # Not an unpacked dump (no _data): nothing is checked.
-        self.assertEqual(run.available_language(17, 7, Path(self.temp_dir.name)), (17, 7))
+        self.assertEqual(run.available_language(17, 17, game, 'CUSA00035'), (17, 17))
+        self.assertEqual(run.available_language(2, 2, self.make_dump(), 'CUSA00035'), (2, 2))
 
 
 if __name__ == '__main__':

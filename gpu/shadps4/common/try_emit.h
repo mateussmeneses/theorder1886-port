@@ -3,6 +3,8 @@
 #pragma once
 namespace Common {
 // Failed recursive JIT emission must not leave pushes or half-computed addresses behind.
+// The rollback truncates the code buffer: `emit` must not bind Xbyak labels (a label bound in
+// the cut-off code would point past the end; the SRT walker's offset emitters bind none).
 template <typename Generator, typename Emit>
 bool TryEmit(Generator& generator, Emit&& emit) {
     const auto start = generator.getSize();

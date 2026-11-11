@@ -263,7 +263,7 @@ Relatos do usuário no teste (feito no pacote v0.8.0, cache frio) e o que já se
   **A cadeia do jogo funciona até a UI; a legenda não é desenhada.** O texto do HUD (objetivo)
   aparece, então a falha é da camada/elemento de legenda na Iggy. Próximo: captura completa de
   um frame com legenda ativa e investigação do `CreateSubtitle` dentro da Iggy.
-- Defeito achado no caminho (`b21abad`): o fallback PT-BR → PT-PT nunca disparava (comparava o
+- Defeito achado no caminho (`d1d78f0`): o fallback PT-BR → PT-PT nunca disparava (comparava o
   caminho do XML com o ID do título), então português nas SKUs sem PT-BR recebia o idioma 17.
 - Ferramenta: as prévias das capturas do build atual saem com R e B trocados (T1).
 

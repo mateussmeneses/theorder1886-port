@@ -706,22 +706,28 @@ static bool ZeroUnresolved() {
 static thread_local u64 g_srt_shader_hash = 0;
 static std::atomic<u32> g_srt_unresolved_descriptors{0}, g_srt_unresolved_data{0};
 
-static void NoteUnresolved(const IR::Inst* use, bool descriptor) {
+// THEORDER_SRT_LOG=1: count unresolved lookups (first 48, then every 256th).
+static void NoteUnresolved(bool descriptor) {
+    static const bool enabled = [] {
+        const char* env = std::getenv("THEORDER_SRT_LOG");
+        return env && env[0] == '1';
+    }();
+    if (!enabled) {
+        return;
+    }
     const u32 d = descriptor ? ++g_srt_unresolved_descriptors : g_srt_unresolved_descriptors.load();
     const u32 v = descriptor ? g_srt_unresolved_data.load() : ++g_srt_unresolved_data;
     if (d + v <= 48 || (d + v) % 256 == 0) {
-        std::printf("SRT unresolved lookup: shader %016llx %s (%s); totals %u descriptor, %u data\n",
-                    static_cast<unsigned long long>(g_srt_shader_hash),
-                    descriptor ? "descriptor" : "data",
-                    descriptor && ZeroUnresolved() ? "null slot" : "user data 0",
-                    d, v);
-        std::fflush(stdout);
+        LOG_INFO(Render_Recompiler,
+                 "SRT unresolved lookup: shader {:#018x} {} ({}); totals {} descriptor, {} data",
+                 g_srt_shader_hash, descriptor ? "descriptor" : "data",
+                 descriptor && ZeroUnresolved() ? "null slot" : "user data 0", d, v);
     }
 }
 
 static void ZeroFillSlot(IR::Inst* use, PassInfo& pass_info, Xbyak::CodeGenerator& c) {
     const bool descriptor = Shader::Optimization::SrtFeedsDescriptor(use);
-    NoteUnresolved(use, descriptor);
+    NoteUnresolved(descriptor);
     if (!descriptor || !ZeroUnresolved()) {
         return;
     }
@@ -736,12 +742,13 @@ static void ZeroFillSubtree(IR::Inst* subtree, PassInfo& pass_info, Xbyak::CodeG
     if (!use_list) {
         return;
     }
-    for (auto [src_off_dw, use] : *use_list) {
-        ZeroFillSlot(use, pass_info, c);
+    // All slots of this level first, then the nested tables, as VisitPointer lays them out.
+    for (const auto& entry : *use_list) {
+        ZeroFillSlot(entry.second, pass_info, c);
     }
-    for (const auto [src_off_dw, use] : *use_list) {
-        if (pass_info.GetUsesAsPointer(use)) {
-            ZeroFillSubtree(use, pass_info, c);
+    for (const auto& entry : *use_list) {
+        if (pass_info.GetUsesAsPointer(entry.second)) {
+            ZeroFillSubtree(entry.second, pass_info, c);
         }
     }
 }

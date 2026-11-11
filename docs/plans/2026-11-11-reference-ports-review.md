@@ -39,7 +39,7 @@ Side finding: with pipeline binaries on, the driver `VkPipelineCache` we save is
 TOport's 12 MB. It did not make new combinations faster on this driver (169 ms), so issue #102's
 "null cache" premise is fixed in code but the cache is empty in the default mode.
 
-## Ported in this session (uncommitted)
+## Ported in this session (v0.8.2)
 
 | Change | Files | Default | Evidence |
 |---|---|---|---|

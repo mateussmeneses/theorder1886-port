@@ -32,6 +32,9 @@ language package, damaged shader cache, RAM guard, SRT walker stack fix.
 
 ## Being worked on
 
+- SpartanPort adoption (`docs/plans/2026-11-11-spartanport-adoption.md`): runtime/memory and
+  GPU fixes first, then audio, menu, upscaling/frame generation, input, launcher.
+
 - Comparison with the other public ports (TOport, DivinusX package), scene by scene:
   `docs/plans/2026-11-11-reference-ports-review.md`. Next: flicker A/B on the same scene in
   both ports.

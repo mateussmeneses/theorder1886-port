@@ -38,6 +38,8 @@ Spec:
 ## Gates
 
 `build.sh` OK; `tools/run_tests.sh` (CLANG64): 60 native tests + Python suite pass. Packaged build
-smoke: below.
+(`dist/theorder1886-windows.zip`, WIP stashed) through `The Order 1886.exe --run`, cold profile
+then the same profile again: >100 ms windows 3 then 1 of 23, no driver pipeline builds, 418
+stored permutations in session 2, prologue reached, no fault.
 
 No P0 open. Decision: release v0.8.3.

@@ -55,6 +55,16 @@ Result Normalize(Info& info) {
             for (std::uint32_t w = 0; w < 8; ++w) if (image.sharp_fetch.offsets[w] != base + w) return {};
         }
     }
+    // No buffer may read from the words about to be zeroed.
+    for (const auto& buffer : info.buffers) {
+        if constexpr (requires { buffer.sharp_fetch.offsets; }) {
+            for (const auto offset : buffer.sharp_fetch.offsets) {
+                for (const auto table : {schema.first_table, schema.second_table}) {
+                    if (offset >= table && offset < table + 16 * 8) return {};
+                }
+            }
+        }
+    }
     Result result{true, active, 2 * (16 - active), 0};
     for (std::uint32_t probe = active; probe < 16; ++probe) {
         for (const auto table : {schema.first_table, schema.second_table}) {

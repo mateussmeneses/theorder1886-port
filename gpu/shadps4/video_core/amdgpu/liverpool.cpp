@@ -503,7 +503,7 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
             auto task =
                 ProcessCeUpdate({indirect_buffer->Address<const u32>(), indirect_buffer->ib_size});
-            // spartanport: free the nested task's frame when this packet ends (#5446).
+            // port: free the nested task's frame when this packet ends (#5446).
             SCOPE_EXIT {
                 task.handle.destroy();
             };
@@ -1421,7 +1421,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
                 auto task = ProcessGraphics(
                     {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, {});
-                // spartanport: free the nested task's frame when this packet ends (#5446).
+                // port: free the nested task's frame when this packet ends (#5446).
                 SCOPE_EXIT {
                     task.handle.destroy();
                 };
@@ -1603,7 +1603,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
             const auto* indirect_buffer = reinterpret_cast<const PM4CmdIndirectBuffer*>(header);
             auto task = ProcessCompute<true>(
                 {indirect_buffer->Address<const u32>(), indirect_buffer->ib_size}, vqid);
-            // spartanport: free the nested task's frame when this packet ends (#5446).
+            // port: free the nested task's frame when this packet ends (#5446).
             SCOPE_EXIT {
                 task.handle.destroy();
             };

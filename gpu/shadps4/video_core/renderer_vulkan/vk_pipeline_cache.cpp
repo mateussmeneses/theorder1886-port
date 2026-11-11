@@ -1475,8 +1475,8 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
     // a draw takes the regular path, as without a worker. ResolveVertexBuffers checks the V#s
     // once more when the draw is recorded, after the writes queued before it.
     const auto& fetch = pipeline->GetFetchShader();
-    if (prepared.vertex.valid && fetch && fetch->attributes.size() == prepared.vertex.count &&
-        !fetch->SharpsUnchanged(pipeline->GetStage(SwStage::Vertex), prepared.vertex.buffers)) {
+    if (prepared.vertex.valid && !fetch.Empty() && fetch.attributes.size() == prepared.vertex.count &&
+        !fetch.SharpsUnchanged(pipeline->GetStage(SwStage::Vertex), prepared.vertex.buffers)) {
         NoteStaleVertexInputs();
         return nullptr;
     }

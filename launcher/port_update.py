@@ -16,6 +16,7 @@ at any point leaves a launcher exe on disk and a journal that recover() undoes.
 The checksum parsing and the .partial download follow the idea of SpartanPort's updater
 (launcher-rust/src/core/update.rs, GPL-compatible); the rest is our own.
 """
+import filecmp
 import hashlib
 import json
 import os
@@ -213,11 +214,11 @@ def _put(copy, replace, source, dest):
 
 
 def _same(a, b):
+    """Same bytes (timestamps can tie on coarse clocks, so they prove nothing)."""
     try:
-        x, y = a.stat(), b.stat()
+        return filecmp.cmp(a, b, shallow=False)
     except OSError:
         return False
-    return x.st_size == y.st_size and x.st_mtime_ns == y.st_mtime_ns
 
 
 def apply(target, new_root, version, user_files, replace=os.replace, copy=shutil.copy2):

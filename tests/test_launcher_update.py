@@ -267,6 +267,14 @@ class Apply(Base):
         with self.assertRaises(pu.UpdateError):
             pu.recover(self.target)
 
+    def test_rollback_restores_files_with_equal_size_and_timestamp(self):
+        """Coarse clocks (CI) give old and new files the same size and mtime: only content tells them apart."""
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        stamp = (self.target / 'backup-0.9.0' / 'run.py').stat().st_mtime_ns
+        os.utime(self.target / 'run.py', ns=(stamp, stamp))
+        self.assertTrue(pu.rollback(self.target))
+        self.assertEqual((self.target / 'run.py').read_bytes(), b'old run')
+
     def test_installed_update_that_never_commits_is_rolled_back_after_n_starts(self):
         pu.apply(self.target, self.new, '0.9.0', USER)
         for _ in range(pu.MAX_STARTS):

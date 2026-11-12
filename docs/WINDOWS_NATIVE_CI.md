@@ -37,28 +37,36 @@ virtual MSYS2 root is usable does the helper fall back to `C:\\msys64`.
 The native CI must verify that unit-test binaries **execute** after the build;
 compilation alone is not a passing result.
 
-## Hosted Windows: missing Vulkan ICD versus genuine regressions
+## Hosted Windows: software Vulkan ICD (Mesa lavapipe)
 
-GitHub-hosted Windows runners can compile and link the native port without
-providing a working Vulkan physical device. Seven renderer-integration tests
-require an actual Vulkan instance: `pipeline-binary-initialization`,
-`async-pipeline-cache`, `scene-resolution`, `taa-shader`, `camera-motion`,
-`dma-barriers`, and `renderpass-barrier`.
+GitHub-hosted Windows runners have no GPU, so the renderer-integration tests that need a Vulkan
+instance (`vulkan_device_tests` in `tools/run_tests.sh`: `pipeline-binary-initialization`,
+`async-pipeline-cache`, `scene-resolution`, `taa-shader`, `camera-motion`, `dma-barriers`,
+`renderpass-barrier`, `frame-generation-runtime`, `fg-motion-shader`) used to be skipped. The
+`clang64` job now installs `mingw-w64-clang-x86_64-mesa`, which ships lavapipe
+(`vulkan_lvp.dll` and `share/vulkan/icd.d/lvp_icd.x86_64.json`), and in the test step only sets
+`VK_DRIVER_FILES`/`VK_ICD_FILENAMES` to that JSON. The `gate` check is unchanged: this is an extra
+step that makes more tests run, not a weaker one.
 
-The workflow explicitly sets `THEORDER_VULKAN_TESTS=auto`. The runner first
-compiles and executes `tests/vulkan_device_probe.c` through the normal Vulkan
-loader. Only `VK_ERROR_INCOMPATIBLE_DRIVER` or an instance reporting no
-physical devices produce exit 77 and allow **those seven tests only** to be
-marked `SKIP`. Unexpected driver/loader errors, probe compilation errors,
-and all remaining CPU, IR, C++, and Python test failures stay **red**. A working
-Vulkan device means the seven tests are **required** even in `auto` mode.
+The workflow keeps `THEORDER_VULKAN_TESTS=auto`. `tests/vulkan_device_probe.c` runs first through
+the normal loader; with lavapipe it finds a device and the device tests are **required**. Only
+`VK_ERROR_INCOMPATIBLE_DRIVER` or zero physical devices (exit 77) may mark those tests `SKIP`
+(listed by name); every other probe/driver error and every other test failure stays red.
+`run_tests.sh` prints `GPU device test PASS: <name> (<s>s)` for each device test and a summary line
+`Vulkan device tests executed (N): ...`, and the workflow prints the wall time of the whole script.
 
-The default for `bash tools/run_tests.sh` is strict
-(`THEORDER_VULKAN_TESTS=required`): no automatic skipping. CI output reports
-the exact names/count of tests skipped. Successful hosted CI therefore means
-native compilation and the CPU/IR/Python suite passed; it does **not** mean
-Vulkan integration tests ran. Those tests must be executed on an actual GPU
-before claiming a graphics fix or resolving black-screen/stutter issues.
+The default for `bash tools/run_tests.sh` stays strict (`THEORDER_VULKAN_TESTS=required`), and the
+real-GPU local run is unchanged.
+
+### Software-ICD exclusions
+
+`THEORDER_VULKAN_SOFTWARE=1` (set only by the workflow) enables the `software_icd_exclusions` list
+in `tools/run_tests.sh`, entries of the form `test|reason`. A listed test is not deleted: it is
+printed as `EXCLUDED (software ICD only)` with the reason and still runs on any real GPU.
+EXCLUSIONS_PLACEHOLDER
+
+Lavapipe proves the Vulkan API usage, barriers and shader compilation paths; it does **not** prove
+behaviour on a real driver. Graphics fixes and black-screen/stutter work still need an actual GPU run.
 
 ## Windows package and test builds
 

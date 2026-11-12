@@ -165,15 +165,24 @@ jobs:
             exit 1
           fi
 
-      - name: Run all CPU/IR tests and GPU tests only when a Vulkan ICD exists
+      - name: Run all tests; GPU device tests on Mesa lavapipe (software Vulkan)
         env:
-          # GitHub-hosted Windows runners have no compatible Vulkan ICD/GPU.
-          # Preflight exits 77 ONLY for proven device absence; all other
-          # errors and all non-GPU tests remain failures.
+          # No hardware GPU on hosted runners. The MSYS2 mesa package ships lavapipe
+          # (vulkan_lvp.dll); point the loader at it for this step only. `auto` stays
+          # as a safety net: if the ICD fails to load the device tests are reported as
+          # SKIPPED by name, but with lavapipe present they are required and must pass.
           THEORDER_VULKAN_TESTS: auto
+          THEORDER_VULKAN_SOFTWARE: "1"
         run: |
           set -euo pipefail
+          icd="$(cygpath -w "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json")"
+          test -f "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json"
+          cat "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json"
+          export VK_DRIVER_FILES="$icd" VK_ICD_FILENAMES="$icd"
+          echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
+          start=$SECONDS
           bash tools/run_tests.sh
+          echo "run_tests.sh wall time: $((SECONDS - start))s"
 
       - name: Save non-player text diagnostics if build/tests fail
         if: failure()

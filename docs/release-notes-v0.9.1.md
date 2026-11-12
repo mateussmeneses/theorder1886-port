@@ -30,7 +30,7 @@ How it was tested:
   - A CI test build ships a different Python runtime than a release, so the launcher will not update a release in place to it (and the launcher only offers releases anyway). Extract a test build to its own folder.
 - **GPU tests in the `gate` check**, on a software Vulkan driver (Mesa lavapipe). Two device tests are excluded there and named in `tools/run_tests.sh`.
 - **Settings catalog.** `scripts/settings_catalog.py` lists every `theorder.ini` key with its default in the game and in the launcher; a test fails when the launcher writes a value the game does not parse. `recomplauncher.json` is generated from it.
-- **Baseline tool.** `tools/bench/baseline.py` measures the scenarios cold, then warm twice, and compares two builds. The v0.9.0 baseline and its run-to-run noise are in `docs/baselines/`.
+- **Baseline tool.** `tools/bench/baseline.py` measures the scenarios cold, then warm twice, and compares two builds. The run-to-run noise measured on v0.9.0 is in `docs/baselines/`; the full baseline is still to be recorded.
 - **Shader cache across GPUs and drivers:** checked, with a new test. The cache was already discarded when the GPU profile changes; nothing changed in behaviour.
 - **Plan:** `docs/plans/2026-11-12-master-plan/`.
 

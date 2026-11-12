@@ -39,7 +39,7 @@ after the first session (#113, waiting for retest).
 
 - Master plan of 2026-11-12 (`docs/plans/2026-11-12-master-plan/`). Done: issue evidence, CI
   package, software-Vulkan tests in the gate, transactional updater, settings catalog, level
-  start, baseline tool and the v0.9.0 baseline, temporal-input spec. Next: the temporal upscaler
+  start, baseline tool and its noise measurement, temporal-input spec. Next: the v0.9.0 baseline, the temporal upscaler
   (#138).
 
 - SpartanPort adoption (`docs/plans/2026-11-11-spartanport-adoption.md`): phases 1-7 done

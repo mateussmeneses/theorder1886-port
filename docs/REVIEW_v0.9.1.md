@@ -1,6 +1,6 @@
 # Release review: Windows v0.9.1
 
-Scope: every change since `windows-v0.9.0`, PRs #143-#154 plus the baseline PR, reviewed on two axes. **Standards** were checked against AGENTS.md, CONTRIBUTING.md and the ponytail rules. **Spec** was checked against the master plan (`docs/plans/2026-11-12-master-plan/`), the issues and the release notes.
+Scope: every change since `windows-v0.9.0`, PRs #143-#154 plus the baseline fixes in this PR, reviewed on two axes. **Standards** were checked against AGENTS.md, CONTRIBUTING.md and the ponytail rules. **Spec** was checked against the master plan (`docs/plans/2026-11-12-master-plan/`), the issues and the release notes.
 
 ## Per-PR reviews
 

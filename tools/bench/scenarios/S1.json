@@ -1,0 +1,10 @@
+{
+  "id": "S1",
+  "title": "3D title menu, 60 s",
+  "game_args": "",
+  "pad": "",
+  "secs": 65,
+  "window": {"start_s": 0, "end_s": 60},
+  "env": {"THEORDER_PERF_LOG": "1"},
+  "notes": "Boot only, no pad (docs/PERFORMANCE_BASELINE.md title-menu runs used 65 s). Window is counted from the first presented frame (the frame CSV starts there). TODO: confirm the menu is reached and stable before 60 s on a cold profile; if boot compiles run past it, lengthen secs."
+}

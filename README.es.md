@@ -82,9 +82,10 @@ python run.py
 
 ### Opciones del motor
 
-Estas opciones existen en el ejecutable del juego y `run.py` las pasa. Su efecto en la versión
-comercial aún no está comprobado: con `--level`, el juego sigue deteniéndose en la pantalla de
-título.
+Estas opciones existen en el ejecutable del juego y `run.py` las pasa. `--level` inicia el juego
+en ese nivel (desde la v0.9.1; cuatro niveles comprobados en CUSA00035 01.02, nombres completos en
+`docs/ENGINE_RE.md`). Con `--level`, las opciones de tela, cámara y MSAA de abajo se omiten: su
+efecto en la versión comercial no está comprobado.
 
 | `run.py` | Opción del juego |
 |---|---|

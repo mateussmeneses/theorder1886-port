@@ -80,8 +80,10 @@ python run.py
 
 ### Engine options
 
-These options exist in the game's executable; `run.py` passes them on. What they do in the retail
-build is not verified yet: with `--level`, the game still stops at the title screen.
+These options exist in the game's executable; `run.py` passes them on. `--level` starts the game
+in that level (since v0.9.1; four levels checked on CUSA00035 01.02, full level names in
+`docs/ENGINE_RE.md`). With `--level`, the cloth, camera and MSAA options below are left out: their
+effect in the retail build is not verified.
 
 | `run.py` | Game option |
 |---|---|

@@ -61,6 +61,8 @@ if [[ -d fsr4_shaders ]]; then
 fi
 cp run.py LICENSE README.md recomplauncher.json packaging/windows/README-Windows.txt "$dest/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
+# Program files of this version, one relative path per line: the updater removes the ones a newer version drops.
+(cd "$dest" && find . -type f ! -name files.manifest | sed 's|^\./||' | LC_ALL=C sort > files.manifest && echo files.manifest >> files.manifest)
 # No game files and nothing a player made (saves, shader caches built from the game's shaders,
 # settings, logs) may ship: stop when one is found.
 set -f

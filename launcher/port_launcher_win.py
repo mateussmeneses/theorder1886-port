@@ -28,6 +28,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
@@ -163,6 +164,7 @@ def list_gpus():
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import button_icons  # noqa: E402
 import port_lang  # noqa: E402
+import port_update  # noqa: E402
 
 LANG = 'en'
 
@@ -2388,32 +2390,38 @@ class Launcher:
             self.update_label.configure(text=_('Downloading version {}… {}%', 'Загрузка версии {}… {}%').format(
                 version, percent))
 
+        def ask_without_checksum():
+            """From the worker thread: the release has no .sha256, so the user decides."""
+            answer, done = [], threading.Event()
+
+            def ask():
+                answer.append(self.messagebox.askyesno(APP_NAME, _(
+                    'This release has no checksum file, so the download cannot be verified. Install it anyway?',
+                    'У этого релиза нет файла контрольной суммы, загрузку нельзя проверить. Всё равно установить?')))
+                done.set()
+            self.ui_calls.put(ask)
+            done.wait()
+            return answer[0]
+
         def work():
             try:
                 shutil.rmtree(UPDATE_DIR, ignore_errors=True)
                 UPDATE_DIR.mkdir(parents=True, exist_ok=True)
-                archive = UPDATE_DIR / 'update.zip'
-                request = urllib.request.Request(url, headers={'User-Agent': 'theorder1886-launcher'})
-                with urllib.request.urlopen(request, timeout=60) as response, open(archive, 'wb') as out:
-                    total, done, shown = int(response.headers.get('Content-Length') or 0), 0, -1
-                    while chunk := response.read(1 << 20):
-                        out.write(chunk)
-                        done += len(chunk)
-                        percent = done * 100 // total if total else 0
-                        if percent != shown:
-                            shown = percent
-                            self.ui_calls.put(lambda p=percent: progress(p))
-                with zipfile.ZipFile(archive) as package:
-                    package.extractall(UPDATE_DIR / 'new')
+                expected = release_checksum(url)
+                if not expected and not ask_without_checksum():
+                    raise port_update.UpdateError(_('cancelled: the download could not be verified.',
+                                                    'отменено: загрузку нельзя проверить.'))
+                archive = port_update.download(url, UPDATE_DIR / 'update.zip',
+                                               progress=lambda p: self.ui_calls.put(lambda: progress(p)))
+                if expected:
+                    port_update.verify_sha256(archive, expected)
+                new = port_update.extract(archive, UPDATE_DIR / 'new', 'The Order 1886.exe')
                 archive.unlink()
-                new = next((p.parent for p in (UPDATE_DIR / 'new').rglob('The Order 1886.exe')), None)
-                if not new:
-                    raise OSError('The Order 1886.exe is missing from the download')
-                # The new launcher copies itself over this installation once this one has closed.
-                subprocess.Popen([str(new / 'The Order 1886.exe'), '--install-update', str(PORT_DIR), str(os.getpid())],
-                                 cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+                # The new launcher swaps itself in (with a backup) once this one has closed.
+                subprocess.Popen([str(new / 'The Order 1886.exe'), '--install-update', str(PORT_DIR), str(os.getpid()),
+                                  VERSION], cwd=str(new), stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
                 self.ui_calls.put(self.root.destroy)
-            except (OSError, zipfile.BadZipFile) as failure:
+            except (OSError, port_update.UpdateError) as failure:
                 def failed(error=failure):
                     self.update_button.configure(state='normal')
                     self.update_label.configure(text=_('Version {} is available.', 'Доступна версия {}.').format(version))
@@ -2692,6 +2700,8 @@ def play_without_window(settings):
         process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+        if WINDOWS and FROZEN:
+            port_update.commit_quietly(PORT_DIR)  # the game started: a pending update is good
         for raw in iter(process.stdout.readline, b''):
             text = raw.decode('utf-8', errors='replace')
             log.write(text)
@@ -2722,31 +2732,46 @@ def latest_release():
     return version, url, release.get('html_url') or RELEASES_PAGE
 
 
-def install_update(target, wait_pid):
-    """--install-update TARGET PID, run by the downloaded version from its temporary folder:
-    waits for the old launcher to close, copies this version over TARGET (never the saves,
-    settings or mods) and starts it."""
+def release_checksum(zip_url):
+    """sha256 of the release ZIP from the `<zip>.sha256` asset tools/release.sh publishes, or None
+    when the release has none (404). Any other failure raises: an unreachable checksum is not 'absent'."""
+    return port_update.fetch_checksum(zip_url)
+
+
+def install_update(target, wait_pid, old_version='previous'):
+    """--install-update TARGET PID [VERSION], run by the downloaded version from its temporary folder:
+    waits for the old launcher to close, swaps this version's program files into TARGET (the old ones
+    go to TARGET/backup-VERSION; never the saves, settings or mods), starts it and keeps the backup
+    only until it has opened. If it does not open, the old version is restored and started."""
     target = Path(target)
     kernel = ctypes.windll.kernel32
     handle = kernel.OpenProcess(0x00100000, False, int(wait_pid))  # SYNCHRONIZE
     if handle:
         kernel.WaitForSingleObject(handle, 60000)
         kernel.CloseHandle(handle)
-    ignore = shutil.ignore_patterns(*USER_FILES)
-    for attempt in range(30):
-        try:
-            shutil.copytree(PORT_DIR, target, dirs_exist_ok=True, ignore=ignore)
-            break
-        except OSError:  # a file still in use: the old launcher is closing
-            time.sleep(1)
-    else:
-        ctypes.windll.user32.MessageBoxW(None, _(
-            'Could not install the update. Download it from the releases page.',
-            'Не удалось установить обновление. Скачайте его со страницы релизов.'), APP_NAME, 0x10)
-        open_url(RELEASES_PAGE)
-        return 1
-    subprocess.Popen([str(target / 'The Order 1886.exe')], cwd=str(target))
-    return 0
+    def notify(kind, detail=''):
+        messages = {
+            'failed': _('Could not install the update ({}). Download it from the releases page.',
+                        'Не удалось установить обновление ({}). Скачайте его со страницы релизов.').format(detail),
+            'restored': _('The new version closed before it finished starting. The previous version was restored.',
+                          'Новая версия закрылась, не успев запуститься. Восстановлена предыдущая версия.'),
+            'launch_failed': _('The new version could not be started (an antivirus may have blocked it). The '
+                               'previous version was restored.', 'Не удалось запустить новую версию (возможно, '
+                                                                 'её заблокировал антивирус). Восстановлена '
+                                                                 'предыдущая версия.'),
+            'restored_slow': _('The new version did not finish starting within 5 minutes. The previous version '
+                               'was restored.', 'Новая версия не запустилась за 5 минут. Восстановлена '
+                                                'предыдущая версия.'),
+            'restore_failed': _('The new version did not start and the previous version could not be restored '
+                                'automatically. The previous files are in the backup-* folder inside {}.',
+                                'Новая версия не запустилась, а предыдущую не удалось восстановить автоматически. '
+                                'Прежние файлы лежат в папке backup-* внутри {}.').format(detail)}
+        ctypes.windll.user32.MessageBoxW(None, messages[kind], APP_NAME, 0x10)
+        if kind == 'failed':
+            open_url(RELEASES_PAGE)
+    return port_update.install_and_watch(
+        target, PORT_DIR, old_version, USER_FILES, lambda: subprocess.Popen([str(target / 'The Order 1886.exe')],
+                                                                            cwd=str(target)), notify)
 
 
 def main():
@@ -2761,8 +2786,13 @@ def main():
     if not WINDOWS:
         integrate_desktop(settings.get('desktop_integration', True), os.environ.get('APPIMAGE'),
                           PORT_DIR / 'launcher' / 'theorder.png', DATA_DIR)
-    if WINDOWS and args[:1] == ['--install-update'] and len(args) == 3:
-        sys.exit(install_update(args[1], args[2]))
+    if WINDOWS and args[:1] == ['--install-update'] and len(args) in (3, 4):
+        sys.exit(install_update(*args[1:]))
+    if WINDOWS and FROZEN:
+        try:  # an update that died halfway is undone before anything starts
+            port_update.recover(PORT_DIR)
+        except (OSError, port_update.UpdateError) as failure:
+            ctypes.windll.user32.MessageBoxW(None, str(failure), APP_NAME, 0x30)
     if WINDOWS and FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     # Without a usable game folder there is nothing to play yet: open the launcher instead.
@@ -2778,6 +2808,8 @@ def main():
     root = tk.Tk() if WINDOWS else tk.Tk(className='port')
     pick_fonts(font.families(root))
     Launcher(root, tk, ttk, filedialog, messagebox)
+    if WINDOWS and FROZEN:
+        port_update.commit_quietly(PORT_DIR)  # the window opened: a pending update is good, drop its backup
     root.mainloop()
 
 

@@ -181,6 +181,9 @@ jobs:
           cat "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json"
           export VK_DRIVER_FILES="$icd" VK_ICD_FILENAMES="$icd"
           echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
+          ldd "$MINGW_PREFIX/bin/vulkan_lvp.dll" || true
+          clang -std=c11 tests/vulkan_device_probe.c -o out/lvp-diag-probe -lvulkan-1
+          VK_LOADER_DEBUG=error,warn,driver ./out/lvp-diag-probe 2>&1 | head -60 || true
           start=$SECONDS
           bash tools/run_tests.sh
           echo "run_tests.sh wall time: $((SECONDS - start))s"

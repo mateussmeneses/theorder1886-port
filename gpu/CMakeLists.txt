@@ -493,6 +493,10 @@ target_compile_options(serdes-damaged-test PRIVATE -UNDEBUG)
 target_include_directories(serdes-damaged-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(serdes-damaged-test PRIVATE Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum)
 
+add_executable(cache-profile-check-test EXCLUDE_FROM_ALL ../tests/test_cache_profile_check.cpp)
+target_compile_options(cache-profile-check-test PRIVATE -UNDEBUG)
+target_include_directories(cache-profile-check-test PRIVATE shim shadps4)
+
 add_executable(htile-expand-test EXCLUDE_FROM_ALL ../tests/test_htile_expand.cpp)
 target_compile_options(htile-expand-test PRIVATE -UNDEBUG)
 target_include_directories(htile-expand-test PRIVATE shim shadps4 third_party/gcn/include)

@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "port_overlay.h"
 #include "port_settings.h"
+#include <thread>
 #include "port_graphics.h"
 #include "video_core/renderer_vulkan/vk_temporal_upscaler.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -433,6 +434,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
 
     Frame* frame = GetRenderFrame();
+    frame->is_generated = false;
+    frame->generated = nullptr;
 
     const auto frame_subresources = vk::ImageSubresourceRange{
         .aspectMask = vk::ImageAspectFlagBits::eColor,
@@ -462,6 +465,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
         .imageMemoryBarrierCount = 1,
         .pImageMemoryBarriers = &pre_barrier,
     });
+    // port (SpartanPort 8192bbb): frame generation, the frame between the previous one and this.
+    const vk::Image generated_image = rasterizer->GetUpscaler().GetFrameGeneration().Generate(
+        cmdbuf, upscaled, upscaled ? display.image : vk::Image{},
+        upscaled ? display.format : vk::Format::eUndefined);
 
     VideoCore::ImageViewInfo view_info{};
     view_info.format = GetFrameViewFormat(attribute.attrib.pixel_format);
@@ -557,6 +564,29 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
         pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
     }
+    if (generated_image && image_view) {
+        // The same passes over the generated frame, into a frame of its own.
+        Frame* generated = GetRenderFrame();
+        const auto generated_barrier = vk::ImageMemoryBarrier2{
+            .srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .srcAccessMask = vk::AccessFlagBits2::eColorAttachmentRead,
+            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .image = generated->image,
+            .subresourceRange{frame_subresources},
+        };
+        cmdbuf.pipelineBarrier2({.imageMemoryBarrierCount = 1,
+                                 .pImageMemoryBarriers = &generated_barrier});
+        const vk::ImageView generated_view = fsr_pass.Render(
+            cmdbuf, rasterizer->GetUpscaler().GetFrameGeneration().GeneratedView(view_info.format),
+            image_size, {generated->width, generated->height}, fsr_settings, generated->is_hdr);
+        pp_pass.Render(cmdbuf, generated_view, image_size, *generated, pp_settings);
+        generated->is_generated = true;
+        generated->generated = nullptr;
+        frame->generated = generated;
+    }
     if (frame_dump) {
         // The presented image as the swapchain blit reads it (General after the pass).
         const vk::MemoryBarrier2 done{.srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
@@ -576,6 +606,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // Flush frame creation commands.
     frame->ready_semaphore = draw_scheduler.GetWorkSemaphore()->Handle();
     frame->ready_tick = draw_scheduler.CurrentTick();
+    if (frame->generated) {
+        frame->generated->ready_semaphore = frame->ready_semaphore;
+        frame->generated->ready_tick = frame->ready_tick;
+    }
     SubmitInfo info{};
     draw_scheduler.Flush(info);
 
@@ -734,6 +768,15 @@ void Presenter::PresentLoadingFrame() {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    // port (SpartanPort 8192bbb, eb82a67): frame generation: the generated frame first, the real
+    // one halfway to the next real frame.
+    using Clock = std::chrono::steady_clock;
+    const auto real_deadline = !is_reusing_frame && is_game_frame
+        ? frame_pacing.RealDeadline(Clock::now()) : Clock::time_point{};
+    if (Frame* generated = std::exchange(frame->generated, nullptr)) {
+        Present(generated, false, false);
+        std::this_thread::sleep_until(real_deadline);
+    }
     // Free the frame for reuse
     const auto free_frame = [&] {
         if (!is_reusing_frame) {

@@ -9,6 +9,7 @@
 #include <condition_variable>
 
 #include "core/libraries/videoout/buffer.h"
+#include "video_core/renderer_vulkan/frame_generation_policy.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -38,7 +39,9 @@ struct Frame {
     u64 ready_tick;
     bool is_hdr{false};
     u8 id{};
-
+    /// port (SpartanPort 8192bbb): frame generation's in-between frame, presented before this one.
+    Frame* generated = nullptr;
+    bool is_generated = false;
 };
 
 enum SchedulerType {
@@ -136,6 +139,9 @@ private:
     VideoCore::TextureCache& texture_cache;
     vk::UniqueCommandPool command_pool;
     std::vector<Frame> present_frames;
+    /// port (SpartanPort eb82a67): frame generation pacing, the generated frame halfway
+    /// between real ones.
+    FrameGenerationPolicy::Pacing frame_pacing;
     std::queue<Frame*> free_queue;
     Frame* last_submit_frame;
     std::mutex free_mutex;

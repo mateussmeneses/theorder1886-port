@@ -240,6 +240,10 @@ void Swapchain::SetSurfaceProperties() {
 
     // Select number of images in swap chain, we prefer one buffer in the background to work on
     image_count = capabilities.minImageCount + 1;
+    // port (SpartanPort 8192bbb): frame generation presents two images per game frame.
+    if (PortSettings::Get().startup_frame_generation != 0) {
+        image_count += 2;
+    }
     if (capabilities.maxImageCount > 0) {
         image_count = std::min(image_count, capabilities.maxImageCount);
     }

@@ -97,6 +97,11 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fps_limit = PortGraphics::ParseFpsLimit(i);
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
+    } else if (key == "frame_generation") {
+        if (!value.empty() && value != "off" && value != "fsr" && value != "0" && value != "1") {
+            std::printf("FG: invalid frame_generation=%s, off\n", value.c_str());
+        }
+        v.frame_generation = value == "fsr" || value == "1" ? 1 : 0;
     } else if (key == "pause_game") {
         v.pause_game = i != 0;
     } else if (key == "ui_language") {
@@ -198,6 +203,7 @@ void Load() {
         {"THEORDER_RCAS", "rcas"},                        {"THEORDER_FRAMES_AHEAD", "frames_queued"},
         {"THEORDER_ANISOTROPY", "anisotropy"},
         {"THEORDER_UI_LANGUAGE", "ui_language"},
+        {"THEORDER_FRAME_GENERATION", "frame_generation"},
         {"THEORDER_AUDIO_VOLUME", "master_volume"},       {"THEORDER_AUDIO_CHANNELS", "audio_channels"},
     };
     for (const auto& [env, key] : env_keys) {
@@ -212,6 +218,7 @@ void Load() {
     v.startup_live_resolution = v.live_resolution;
     v.startup_aspect = v.aspect;
     v.startup_engine_fps = v.engine_fps;
+    v.startup_frame_generation = v.frame_generation;
     const char* applied = std::getenv("THEORDER_ENGINE_FPS");
     v.applied_engine_fps = applied && applied[0] ? PortGraphics::ParseEngineFps(std::atoi(applied))
                                                  : v.engine_fps.load();
@@ -324,6 +331,7 @@ void Save() {
                          ? std::string(PortUi::Languages[language].code).c_str()
                          : "auto");
     }
+    std::fprintf(file, "frame_generation=%s\n", v.frame_generation == 1 ? "fsr" : "off");
     std::fprintf(file, "pause_game=%d\n", int(v.pause_game.load()));
     std::fprintf(file, "master_volume=%d\naudio_channels=%s\n", v.master_volume.load(),
                  AudioChannelKeys[std::clamp(v.audio_channels.load(), 0, AudioChannelsCount - 1)].data());

@@ -129,6 +129,16 @@ struct Values {
     /// DLSS (port_dlss.dll, NVIDIA RTX) is ready, or why not (null before the device exists).
     std::atomic<bool> dlss_supported{false};
     std::atomic<const char*> dlss_problem{nullptr};
+    /// port (SpartanPort 8192bbb): AMD FSR 3.1 frame generation 2x (frame_generation_policy.h
+    /// Mode): theorder.ini frame_generation off / fsr, THEORDER_FRAME_GENERATION. Applied on
+    /// restart: the swapchain gets two more images for it (startup_frame_generation).
+    std::atomic<int> frame_generation{0};
+    int startup_frame_generation = 0;
+    /// Why frame generation is off after it was asked for, the one-line status for the menu
+    /// (vk_frame_generation.cpp, once a second), and the game's own FPS while it runs.
+    std::atomic<const char*> fg_problem{nullptr};
+    std::atomic<const char*> fg_status{nullptr};
+    std::atomic<float> fg_game_fps{0.0f};
 
     /// Startup settings for the explicit THEORDER_RENDER_RES compatibility patch only.
     int startup_preset = NativeAA;

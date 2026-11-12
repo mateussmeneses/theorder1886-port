@@ -750,6 +750,26 @@ WINDOWS_LANGUAGES = {0x19: 'ru', 0x01: 'ar', 0x0a: 'es', 0x16: 'pt', 0x0c: 'fr',
 # other languages fall back to English for them until someone who speaks them contributes.
 EXTRA = {
     'pt': {
+        'Audio': 'Áudio',
+        'Master volume': 'Volume geral',
+        "100% is the game's own mix; more is boosted behind a soft limiter.":
+            '100% é a mixagem do próprio jogo; acima disso o som é amplificado com um limitador suave.',
+        'Speakers': 'Alto-falantes',
+        "Layout of the game's 7.1 sound. Automatic follows the playback device.":
+            'Distribuição do som 7.1 do jogo. Automático segue o dispositivo de reprodução.',
+        "Automatic (the device's)": 'Automático (conforme o dispositivo)',
+        'Stereo': 'Estéreo',
+        'Pause the game while the menu is open': 'Pausar o jogo com o menu aberto',
+        'The game stops while the in-game menu (Insert / R3+L2) is open.':
+            'O jogo para enquanto o menu do jogo (Insert / R3+L2) está aberto.',
+        'Frame generation': 'Geração de quadros',
+        'Off': 'Desligada',
+        'AMD FSR 3.1 (2x, experimental)': 'AMD FSR 3.1 (2x, experimental)',
+        'Experimental: a generated frame between every two real ones. Needs the upscaler at a scaled preset, '
+        'which does not run on this game build yet (issue #138), so for now it only adds latency.':
+            'Experimental: um quadro gerado entre cada dois quadros reais. Precisa do upscaler num preset '
+            'escalado, que ainda não roda nesta versão do jogo (issue #138), então por enquanto só aumenta '
+            'a latência.',
         '30 (original)': '30 (original)',
         '60 (experimental)': '60 (experimental)',
         'Your own dump of the game (eboot.bin, sce_module, sce_sys): The Order: 1886. Tested: CUSA00035, version 01.02.':

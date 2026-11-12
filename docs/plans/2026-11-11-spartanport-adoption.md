@@ -132,6 +132,14 @@ Releases bundle finished phases (v0.9.0 after phases 1-2).
   ported, experimental. Blocked in game by #138: the temporal upscaler never runs on CUSA00035
   01.02 in the tested scenes, so no frame is captured. The other upscaler items (7280104, 9f501f6,
   9bd1fec, 8d3fca2, 9fdc30c, 3ad12a7, bf9181b) wait for #138 too.
+- #138 investigated: the G-buffer here has 3 color targets (the heuristic wants 5+) and no 864-byte
+  camera constants with the far plane 3000 appear; finding the camera on 01.02 is reverse-engineering
+  work, left open.
+- Phase 6 (#140): an alternative key per button (cbdbf29, game side) and trophies kept, reported
+  back and shown with their icon. Not applied: 6c0df98 (would break precision aim), 4ccf29d,
+  fefc68f and the trophy themes/sound/list (SpartanPort launcher and mods), Discord.
+- Phase 7: decision note `docs/plans/2026-11-12-launcher-decision.md` (keep the Python launcher,
+  port its settings); the launcher gets the phase 3-5 settings.
 - Pending checks:
   - reporters' retest for #99 and #63;
   - runtime-test hangs on Windows and stays out of the gate;

@@ -59,3 +59,28 @@ the exact names/count of tests skipped. Successful hosted CI therefore means
 native compilation and the CPU/IR/Python suite passed; it does **not** mean
 Vulkan integration tests ran. Those tests must be executed on an actual GPU
 before claiming a graphics fix or resolving black-screen/stutter issues.
+
+## Windows package and test builds
+
+`.github/workflows/windows-package.yml` ("Windows package", run by hand from the Actions tab on the
+branch to build) builds the same CLANG64 tree as the gate, runs `packaging/windows/package.sh`,
+writes `theorder1886-windows.zip.sha256` and keeps both as the workflow artifact `theorder1886-windows`
+(14 days). A second job on a clean runner without MSYS2 then runs `packaging/windows/smoke-test.ps1`:
+it checks the sha256, extracts the zip, looks for the expected files and for files that must not
+ship, checks that every DLL imported by each executable is in the package or in System32, runs
+`theorder-probe.exe --cpu-features`, and starts the launcher with `--recomplauncher-prepare` on an
+empty folder (exit code 1 and the "Incomplete" message, no window). CI has no game dump, so this is
+not the real smoke: `tools/smoke_package.py --game-dir ...` stays a local step of `tools/release.sh`.
+
+Inputs:
+
+- `tag` empty: build and smoke only.
+- `tag` = a new `windows-v<version>-issue<N>-test<M>`: after the smoke passes, a pre-release is created
+  on the built commit with the zip and sha256, and a note asking the reporter to retest in issue #N.
+- any other new tag is refused (releases come from `tools/release.sh`); an existing tag is refused
+  unless `overwrite_existing` is true, which replaces only that release's zip and sha256.
+
+Only the final `publish` job has `contents: write`; the workflow uses nothing but `GITHUB_TOKEN`.
+Delete a test pre-release (and its tag) when the issue is closed. A workflow can only be dispatched
+from the Actions tab or `gh workflow run windows-package.yml --ref <branch>` once the file exists on
+the default branch.

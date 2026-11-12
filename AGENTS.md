@@ -27,6 +27,7 @@ Read `README.md` for the supported setup and `docs/PROGRESS.md` plus the nearest
   the PRs did not.
 - Work in progress lives in its own branch or worktree (`wip/…`), never as uncommitted changes in
   the `master` working tree that a release must stash around.
+- A fix for a reporter on Windows can be sent as a test build: run the "Windows package" workflow on the branch with tag `windows-v<version>-issue<N>-test<M>` (a pre-release the reporter retests; empty tag = artifact only; see `docs/WINDOWS_NATIVE_CI.md`). Delete the pre-release when the issue is closed.
 - Releases are cut from an up-to-date, clean `master` with `tools/release.sh VERSION GAME_DIR`
   (build, tests, package, package smoke cold and warm, sha256, tag, GitHub release, retest labels).
 

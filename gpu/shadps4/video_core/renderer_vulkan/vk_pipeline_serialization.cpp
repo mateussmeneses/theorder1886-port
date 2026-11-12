@@ -26,6 +26,7 @@
 #include "common/scope_exit.h"
 #include "video_core/renderer_vulkan/vk_pipeline_serialization.h"
 #include "common/thread.h"
+#include "shader_recompiler/profile_blob.h"
 #include "port_overlay.h"
 #include "core/emulator_settings.h"
 #include "bb_face_depth_fix.h"
@@ -1253,11 +1254,7 @@ bool PipelineCache::CheckCacheProfile() {
         LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
                     profile_data.size(), sizeof(Shader::Profile));
     }
-    Shader::Profile cached_profile{};
-    if (profile_data.size() == sizeof(Shader::Profile)) {
-        std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
-    }
-    if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile) {
+    if (!Shader::StoredProfileMatches(profile_data, profile)) {
         // port: upstream closed the cache for the session here, so it was never rewritten
         // and every later session compiled every shader again (stutters on each new area).
         // Start a fresh cache for this build and GPU instead.

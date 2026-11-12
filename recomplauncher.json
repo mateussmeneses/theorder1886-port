@@ -196,6 +196,234 @@
       "defaults": {
         "show_fps": "1"
       }
+    },
+    {
+      "id": "aspect_ratio",
+      "label": "Aspect ratio",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Original (2.40:1, black bars)",
+          "set": {
+            "aspect_ratio": "original"
+          }
+        },
+        {
+          "label": "16:9",
+          "set": {
+            "aspect_ratio": "16:9"
+          }
+        },
+        {
+          "label": "16:10",
+          "set": {
+            "aspect_ratio": "16:10"
+          }
+        },
+        {
+          "label": "21:9",
+          "set": {
+            "aspect_ratio": "21:9"
+          }
+        },
+        {
+          "label": "32:9 (Super Ultrawide)",
+          "set": {
+            "aspect_ratio": "32:9"
+          }
+        }
+      ],
+      "defaults": {
+        "aspect_ratio": "original"
+      }
+    },
+    {
+      "id": "engine_fps",
+      "label": "Game frame rate",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "30 FPS (original)",
+          "set": {
+            "engine_fps": "60"
+          }
+        },
+        {
+          "label": "60 FPS (default)",
+          "set": {
+            "engine_fps": "120"
+          }
+        },
+        {
+          "label": "120 FPS (unlocked)",
+          "set": {
+            "engine_fps": "240"
+          }
+        }
+      ],
+      "defaults": {
+        "engine_fps": "120"
+      }
+    },
+    {
+      "id": "anisotropy",
+      "label": "Anisotropic filtering",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Game default",
+          "set": {
+            "anisotropy": "0"
+          }
+        },
+        {
+          "label": "2x",
+          "set": {
+            "anisotropy": "2"
+          }
+        },
+        {
+          "label": "4x",
+          "set": {
+            "anisotropy": "4"
+          }
+        },
+        {
+          "label": "8x",
+          "set": {
+            "anisotropy": "8"
+          }
+        },
+        {
+          "label": "16x",
+          "set": {
+            "anisotropy": "16"
+          }
+        }
+      ],
+      "defaults": {
+        "anisotropy": "0"
+      }
+    },
+    {
+      "id": "master_volume",
+      "label": "Master volume",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "0%",
+          "set": {
+            "master_volume": "0"
+          }
+        },
+        {
+          "label": "25%",
+          "set": {
+            "master_volume": "25"
+          }
+        },
+        {
+          "label": "50%",
+          "set": {
+            "master_volume": "50"
+          }
+        },
+        {
+          "label": "75%",
+          "set": {
+            "master_volume": "75"
+          }
+        },
+        {
+          "label": "100%",
+          "set": {
+            "master_volume": "100"
+          }
+        },
+        {
+          "label": "125%",
+          "set": {
+            "master_volume": "125"
+          }
+        },
+        {
+          "label": "150%",
+          "set": {
+            "master_volume": "150"
+          }
+        },
+        {
+          "label": "175%",
+          "set": {
+            "master_volume": "175"
+          }
+        },
+        {
+          "label": "200%",
+          "set": {
+            "master_volume": "200"
+          }
+        }
+      ],
+      "defaults": {
+        "master_volume": "100"
+      }
+    },
+    {
+      "id": "audio_channels",
+      "label": "Speakers",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Automatic (the device's)",
+          "set": {
+            "audio_channels": "auto"
+          }
+        },
+        {
+          "label": "Stereo",
+          "set": {
+            "audio_channels": "stereo"
+          }
+        },
+        {
+          "label": "5.1",
+          "set": {
+            "audio_channels": "5.1"
+          }
+        },
+        {
+          "label": "7.1",
+          "set": {
+            "audio_channels": "7.1"
+          }
+        }
+      ],
+      "defaults": {
+        "audio_channels": "auto"
+      }
+    },
+    {
+      "id": "pause_game",
+      "label": "Pause while the menu is open",
+      "in": "graphics",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "pause_game": "0"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "pause_game": "1"
+          }
+        }
+      ],
+      "defaults": {
+        "pause_game": "1"
+      }
     }
   ],
   "saves": [

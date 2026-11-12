@@ -1,0 +1,10 @@
+{
+  "id": "S3",
+  "title": "Prologue: opening cutscene",
+  "game_args": "",
+  "pad": "24:cross:0.5 28:cross:0.5 32:cross:0.5 36:cross:0.5 40:cross:0.5 50:cross:0.5 60:cross:0.5",
+  "secs": 125,
+  "window": {"start_s": 0, "end_s": 80},
+  "env": {"THEORDER_PERF_LOG": "1"},
+  "notes": "Same route as S2 (doc 09 section 3). TODO: the seconds at which the opening cutscene plays were NOT confirmed; the window 0-80 s is a placeholder. Find the cutscene interval from a frame-trace capture and set start_s/end_s."
+}

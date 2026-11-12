@@ -1,0 +1,10 @@
+{
+  "id": "S2",
+  "title": "Prologue: cover tutorial (static camera)",
+  "game_args": "",
+  "pad": "24:cross:0.5 28:cross:0.5 32:cross:0.5 36:cross:0.5 40:cross:0.5 50:cross:0.5 60:cross:0.5",
+  "secs": 125,
+  "window": {"last_s": 45},
+  "env": {"THEORDER_PERF_LOG": "1"},
+  "notes": "Route and 125 s from docs/AFFINITY_STABILITY_RETEST.md; last 45 s as tools/bench/analyze.py (WINDOW_S). TODO: confirm the tutorial with a static camera is what is on screen in that window (capture of the final scene) and adjust the window."
+}

@@ -128,7 +128,7 @@ static SDL_Gamepad *current_gamepad(void) {
 }
 /* Button sources: a host button or key and the PS4 button it presses. The defaults below can be
  * changed per PS4 button with THEORDER_PAD_MAP (gamepad) and THEORDER_KEY_MAP (keyboard), e.g.
- * THEORDER_KEY_MAP="cross=Q,square=Left Shift" or THEORDER_PAD_MAP="cross=b,circle=a": comma-separated
+ * THEORDER_KEY_MAP="cross=Q|K,square=Left Shift" or THEORDER_PAD_MAP="cross=b,circle=a": comma-separated
  * <ps4 button>=<SDL key or gamepad button name>. A mapped PS4 button loses its default sources.
  * touchpad_left (alias touchpad) and touchpad_right are the two sides of the touchpad click:
  * photo mode and the pause menu. Back/View (Share on a DualSense) is the right click, and with
@@ -195,15 +195,29 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
         entry=next;
         uint32_t ps=0;
         for (size_t i=0;i<sizeof(ps_names)/sizeof(*ps_names);++i) if (!SDL_strcasecmp(button,ps_names[i].name)) ps=ps_names[i].ps;
-        const int source=!*name ? -1 : keyboard ? (int)SDL_GetScancodeFromName(name) : (int)SDL_GetGamepadButtonFromString(name);
-        if (!ps || source<=(keyboard ? (int)SDL_SCANCODE_UNKNOWN : (int)SDL_GAMEPAD_BUTTON_INVALID)) {
+        /* port (SpartanPort cbdbf29): up to four names joined by '|' (cross=Space|K); every valid
+         * one presses the button, an invalid one is skipped by itself. */
+        int sources[4], count=0;
+        char names[256];
+        snprintf(names,sizeof(names),"%s",name);
+        for (char *part=names; part && count<4;) {
+            char *bar=strchr(part,'|');
+            if (bar) *bar++=0;
+            const char *one=trim(part);
+            const int source=!*one ? -1 : keyboard ? (int)SDL_GetScancodeFromName(one) : (int)SDL_GetGamepadButtonFromString(one);
+            if (source>(keyboard ? (int)SDL_SCANCODE_UNKNOWN : (int)SDL_GAMEPAD_BUTTON_INVALID)) sources[count++]=source;
+            else if (*one) printf("Runtime: pad map: ignored '%s' for '%s'\n",one,button);
+            part=bar;
+        }
+        if (!ps || !count) {
             printf("Runtime: pad map: ignored '%s=%s'\n",button,name);
             continue;
         }
         size_t kept=0;
         for (size_t i=0;i<map->count;++i) if (map->entries[i].ps!=ps) map->entries[kept++]=map->entries[i];
         map->count=kept;
-        if (map->count<sizeof(map->entries)/sizeof(*map->entries)) map->entries[map->count++]=(ButtonSource){source,ps};
+        for (int i=0;i<count;++i)
+            if (map->count<sizeof(map->entries)/sizeof(*map->entries)) map->entries[map->count++]=(ButtonSource){sources[i],ps};
         ++used;
     }
     return used;

@@ -198,7 +198,7 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
         /* port (SpartanPort cbdbf29): up to four names joined by '|' (cross=Space|K); every valid
          * one presses the button, an invalid one is skipped by itself. */
         int sources[4], count=0;
-        char names[256];
+        char names[1024];
         snprintf(names,sizeof(names),"%s",name);
         for (char *part=names; part && count<4;) {
             char *bar=strchr(part,'|');
@@ -208,6 +208,7 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
             if (source>(keyboard ? (int)SDL_SCANCODE_UNKNOWN : (int)SDL_GAMEPAD_BUTTON_INVALID)) sources[count++]=source;
             else if (*one) printf("Runtime: pad map: ignored '%s' for '%s'\n",one,button);
             part=bar;
+            if (part && count==4 && *trim(part)) printf("Runtime: pad map: '%s' takes four names, ignored '%s'\n",button,trim(part));
         }
         if (!ps || !count) {
             printf("Runtime: pad map: ignored '%s=%s'\n",button,name);
@@ -216,8 +217,10 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
         size_t kept=0;
         for (size_t i=0;i<map->count;++i) if (map->entries[i].ps!=ps) map->entries[kept++]=map->entries[i];
         map->count=kept;
-        for (int i=0;i<count;++i)
+        for (int i=0;i<count;++i) {
             if (map->count<sizeof(map->entries)/sizeof(*map->entries)) map->entries[map->count++]=(ButtonSource){sources[i],ps};
+            else printf("Runtime: pad map: full, ignored a source for '%s'\n",button);
+        }
         ++used;
     }
     return used;

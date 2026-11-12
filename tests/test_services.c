@@ -83,10 +83,16 @@ int main(void) {
     assert(playgo_close(handle)==0 && playgo_close(handle)==PLAYGO_BAD_HANDLE && playgo_terminate()==0);
 
     /* Trophies (SpartanPort): unlocks are saved in <user dir>/trophies.dat and reported back; a
-     * second unlock of the same trophy is refused. No trophy00.trp here: no count, no platinum. */
+     * second unlock of the same trophy answers 0 without a second notice. No trophy00.trp here:
+     * no count, no platinum. The test's own folder keeps other files (trophy_names.txt) out. */
     char trophy_dir_path[512];
     const char *tmp=getenv("TEMP") ? getenv("TEMP") : "/tmp";
-    snprintf(trophy_dir_path,sizeof(trophy_dir_path),"%s",tmp);
+    snprintf(trophy_dir_path,sizeof(trophy_dir_path),"%s/theorder-services-test",tmp);
+#ifdef _WIN32
+    _mkdir(trophy_dir_path);
+#else
+    mkdir(trophy_dir_path,0700);
+#endif
 #ifdef _WIN32
     _putenv_s("THEORDER_USER_DIR",trophy_dir_path);
 #else
@@ -101,14 +107,27 @@ int main(void) {
     int32_t platinum=7;
     assert(trophy_unlock(1,1,5,&platinum)==0 && platinum==-1 && trophy_notified==5);
     trophy_notified=-1;
-    assert(trophy_unlock(1,1,5,&platinum)==TROPHY_ALREADY_UNLOCKED && trophy_notified==-1);
-    assert(trophy_unlock(1,1,40,NULL)==0 && trophy_unlock(1,1,TROPHY_MAX,NULL)==TROPHY_INVALID);
+    assert(trophy_unlock(1,1,5,&platinum)==0 && trophy_notified==-1);
+    assert(trophy_unlock(1,1,40,NULL)==0 && trophy_unlock(1,1,TROPHY_MAX,NULL)==TROPHY_INVALID_ID);
+    assert(trophy_unlock(1,1,-1,NULL)==TROPHY_INVALID_ID);
     assert(trophy_unlock_state(1,1,flags,&count)==0 && flags[0]==(1u<<5) && flags[1]==(1u<<8));
     FILE *saved=fopen(trophy_file,"rb");
     uint32_t on_disk[4]={0};
     assert(saved && fread(on_disk,sizeof(on_disk),1,saved)==1 && on_disk[0]==(1u<<5) && on_disk[1]==(1u<<8));
     fclose(saved);
+    char trophy_tmp[620];
+    snprintf(trophy_tmp,sizeof(trophy_tmp),"%s.tmp",trophy_file);
+    assert(fopen(trophy_tmp,"rb")==NULL); /* moved over trophies.dat, not left behind */
+    /* The next start reads them back from the file. */
+    memset(trophy_flags,0,sizeof(trophy_flags));
+    trophy_ready=0;
+    assert(trophy_unlock_state(1,1,flags,&count)==0 && flags[0]==(1u<<5) && flags[1]==(1u<<8));
     remove(trophy_file);
+#ifdef _WIN32
+    _rmdir(trophy_dir_path);
+#else
+    rmdir(trophy_dir_path);
+#endif
 
     float ratio=0; assert(safe_area(&ratio)==0 && ratio==1.0f && safe_area(NULL)==SYSTEM_PARAMETER);
     puts("services test: ok");

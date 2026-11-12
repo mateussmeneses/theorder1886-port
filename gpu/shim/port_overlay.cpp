@@ -92,6 +92,8 @@ TrophyNotice trophy_current;
 ImTextureData* trophy_texture = nullptr;
 std::chrono::steady_clock::time_point trophy_until{};
 std::atomic<bool> trophy_active{false};
+// Notices queued but not shown yet: Visible() reads it without imgui_mutex (presenter thread).
+std::atomic<int> trophy_pending{0};
 constexpr auto TrophyShown = std::chrono::seconds(6);
 std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
@@ -1080,6 +1082,7 @@ void UpdateTrophyNotice() {
     }
     trophy_current = std::move(trophy_queue.front());
     trophy_queue.erase(trophy_queue.begin());
+    trophy_pending = int(trophy_queue.size());
     if (!trophy_current.icon.rgba.empty()) {
         trophy_texture = IM_NEW(ImTextureData)();
         trophy_texture->Create(ImTextureFormat_RGBA32, trophy_current.icon.width,
@@ -1376,7 +1379,7 @@ void SetLoading(bool active, u32 done, u32 total) {
 bool Visible() {
     const auto& s = PortSettings::Get();
     return initialized && (loading || background_total || menu_open || text_entry_active || choice_active ||
-                           choice_retiring || s.show_fps || trophy_active || !trophy_queue.empty());
+                           choice_retiring || s.show_fps || trophy_active || trophy_pending > 0);
 }
 
 bool CapturesInput() {
@@ -1420,6 +1423,7 @@ void BeginChoice(const std::string& title, const std::vector<std::string>& items
 void ShowTrophy(int id, const std::string& name, const std::string& detail,
                 const unsigned char* png, size_t png_size) {
     TrophyNotice notice{name, detail, {}};
+    // Decoded on the thread that unlocked the trophy (a few ms, once per trophy).
     if (png && png_size && !PortPng::DecodeRgba(png, png_size, notice.icon)) {
         notice.icon = {};
     }
@@ -1428,6 +1432,9 @@ void ShowTrophy(int id, const std::string& name, const std::string& detail,
     std::scoped_lock lock{imgui_mutex};
     if (trophy_queue.size() < 16) {
         trophy_queue.push_back(std::move(notice));
+        trophy_pending = int(trophy_queue.size());
+    } else {
+        std::printf("Overlay: trophy %d notice dropped (16 waiting)\n", id);
     }
 }
 

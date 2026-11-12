@@ -435,7 +435,11 @@ static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
  * <user dir>/trophies.dat. Names come from an optional <user dir>/trophy_names.txt
  * ("ID=Name | Description" per line); without it the notice says "Trophy ID n". */
 #define TROPHY_MAX 128
-#define TROPHY_ALREADY_UNLOCKED ((int32_t)0x80551609)
+/* ORBIS_NP_TROPHY_ERROR_INVALID_TROPHY_ID (shadPS4 np_error.h). A second unlock of the same
+ * trophy answers 0, as this port always did: the console's ALREADY_UNLOCKED (0x8055160C) is a
+ * behaviour change The Order was never tested with (SpartanPort used 0x80551609, which is
+ * INVALID_CONTEXT). */
+#define TROPHY_INVALID_ID ((int32_t)0x8055160A)
 static uint32_t trophy_flags[4];
 static uint32_t trophy_total;
 static int trophy_ready;
@@ -453,10 +457,23 @@ static const char *trophy_state_path(void) {
     return path;
 }
 static uint32_t trp_be32(const unsigned char *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
+/* Written to a temporary file and moved over the old one: an interrupted or failed write never
+ * leaves a short trophies.dat (which would read as nothing unlocked). */
 static void trophy_save(void) {
-    FILE *f=fopen(trophy_state_path(),"wb");
-    if (!f) { printf("Runtime: trophies: cannot write %s\n",trophy_state_path()); return; }
-    fwrite(trophy_flags,sizeof(trophy_flags),1,f); fclose(f);
+    char tmp[600];
+    snprintf(tmp,sizeof(tmp),"%s.tmp",trophy_state_path());
+    FILE *f=fopen(tmp,"wb");
+    if (!f) { printf("Runtime: trophies: cannot write %s\n",tmp); return; }
+    const int written=fwrite(trophy_flags,sizeof(trophy_flags),1,f)==1;
+    if (fclose(f)!=0 || !written) { printf("Runtime: trophies: cannot write %s\n",tmp); remove(tmp); return; }
+#ifdef _WIN32
+    if (!MoveFileExA(tmp,trophy_state_path(),MOVEFILE_REPLACE_EXISTING)) {
+#else
+    if (rename(tmp,trophy_state_path())!=0) {
+#endif
+        printf("Runtime: trophies: cannot replace %s\n",trophy_state_path());
+        remove(tmp);
+    }
 }
 /* The whole trophy00.trp stays in memory (about 3 MB): trophy_icon() hands the overlay the PNG of
  * the trophy that was just unlocked. */
@@ -483,20 +500,14 @@ static int trophy_icon(int32_t id,const unsigned char **png,uint64_t *size) {
     }
     return 0;
 }
-/* Texts: <user dir>/trophy_texts.txt (the launcher writes it in its language on every start) or, when
- * there is none, <user dir>/trophy_names.txt. One "ID=Name | Description" per line (the description is
- * optional), "@label=text" for the labels of the notice and of the trophy list, # starts a comment. */
+/* Names: <user dir>/trophy_names.txt, one "ID=Name | Description" per line (the description is
+ * optional); # starts a comment. */
 static char trophy_names[TROPHY_MAX][64];
 static char trophy_details[TROPHY_MAX][160];
 static FILE *trophy_open_text(char *path,size_t size) {
     const char *dir=trophy_dir();
-    static const char *const files[1]={"trophy_names.txt"};
-    for (int i=0;i<1;i++) {
-        snprintf(path,size,"%s/%s",dir,files[i]);
-        FILE *f=fopen(path,"rb");
-        if (f) return f;
-    }
-    return 0;
+    snprintf(path,size,"%s/trophy_names.txt",dir);
+    return fopen(path,"rb");
 }
 static void trophy_load_names(void) {
     char path[512];
@@ -628,7 +639,7 @@ static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) 
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
     if (platinum) *platinum=-1;
-    if (id<0 || id>=TROPHY_MAX) return TROPHY_INVALID;
+    if (id<0 || id>=TROPHY_MAX) return TROPHY_INVALID_ID;
     pthread_mutex_lock(&lock);
     trophy_load_once();
     uint32_t bit=1u<<(id%32);
@@ -640,7 +651,7 @@ static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *
         platinum_now=id!=0 && trophy_grant_platinum();
     }
     pthread_mutex_unlock(&lock);
-    if (already) return TROPHY_ALREADY_UNLOCKED;
+    if (already) return 0;
     printf("Runtime: trophy %d unlocked\n",id);
     trophy_notify(id);
     if (platinum_now) {

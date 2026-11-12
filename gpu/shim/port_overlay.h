@@ -42,6 +42,11 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 /// The menu is open or a text entry is shown: the game's input is held neutral.
 bool CapturesInput();
 
+/// The game unlocked a trophy: a notice with its name, description and icon (a PNG from the
+/// game's trophy00.trp, or null) shows for a few seconds; later ones wait their turn.
+void ShowTrophy(int id, const std::string& name, const std::string& detail,
+                const unsigned char* png, size_t png_size);
+
 /// port (SpartanPort 6853390): the menu is open and the player keeps the game stopped meanwhile
 /// (PortSettings::pause_game), outside a loading screen. The present thread draws the last
 /// frame again for the menu over it.

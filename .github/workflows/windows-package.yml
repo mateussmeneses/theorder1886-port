@@ -1,0 +1,202 @@
+# Windows package built by CI, opened on a clean runner, and optionally published as a test build.
+# Adapted from the sister project's windows-zip.yml (same lineage, GPL-2.0). Run by hand
+# (Actions > Windows package > Run workflow), on the branch to build:
+#   - empty tag: build and smoke-test; the zip and its .sha256 are kept as a workflow artifact.
+#   - NEW tag windows-v<version>-issue<N>-test<M> (e.g. windows-v0.9.1-issue118-test1): the same,
+#     then a pre-release on that commit carrying the zip, asking the reporter to retest in the issue.
+#   - any other tag (a release such as windows-v0.9.0): refused. A release is cut by
+#     tools/release.sh. Replacing the zip of an EXISTING tag needs overwrite_existing=true.
+# No game files and no secrets beyond GITHUB_TOKEN; only the release job can write contents.
+name: Windows package
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Empty = build only. New tag windows-v<version>-issue<N>-test<M> = test pre-release on this commit."
+        required: false
+        default: ""
+      overwrite_existing:
+        description: "Allow replacing the zip of a tag that already has a release (never needed for a new test tag)."
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-package-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check-tag:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      - id: check
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          OVERWRITE: ${{ inputs.overwrite_existing }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TAG" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"; echo "No tag: build only."; exit 0
+          fi
+          exists=false
+          if gh release view "$TAG" >/dev/null 2>&1 || gh api "repos/$GH_REPO/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            exists=true
+          fi
+          if [[ "$exists" == true ]]; then
+            if [[ "$OVERWRITE" != true ]]; then
+              echo "::error::$TAG already exists. Pass overwrite_existing=true to replace its zip, or use a new test tag."
+              exit 1
+            fi
+            echo "::warning::$TAG exists; its zip will be replaced (overwrite_existing=true)."
+          elif ! [[ "$TAG" =~ ^windows-v[0-9]+\.[0-9]+\.[0-9]+-issue[0-9]+-test[0-9]+$ ]]; then
+            echo "::error::A new tag must look like windows-v<version>-issue<N>-test<M> (got '$TAG'). Releases are cut by tools/release.sh."
+            exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and package
+    needs: check-tag
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Preserve LF on checkout
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      # A python.org-style Windows Python for PyInstaller (package.sh looks it up by WINPYTHON).
+      - uses: actions/setup-python@v5
+        id: winpython
+        with:
+          python-version: "3.12"
+
+      # Same CLANG64 environment as the gate (windows-native-validation.yml).
+      - name: Install CLANG64 build and runtime dependencies
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          install: >-
+            git patch
+            mingw-w64-clang-x86_64-toolchain
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-python
+            mingw-w64-clang-x86_64-python-numpy
+            mingw-w64-clang-x86_64-tk
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-sdl3
+            mingw-w64-clang-x86_64-fmt
+            mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-robin-map
+            mingw-w64-clang-x86_64-xxhash
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-zydis
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-spirv-headers
+            mingw-w64-clang-x86_64-spirv-cross
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          test "$MSYSTEM" = CLANG64
+          bash build.sh
+
+      - name: Package
+        env:
+          WINPYTHON: ${{ steps.winpython.outputs.python-path }}
+          THEORDER_PACKAGE_REFRESH: "0"
+        run: |
+          set -euo pipefail
+          rm -f ./*.spv
+          bash packaging/windows/package.sh
+          cd dist
+          sha256sum -b theorder1886-windows.zip > theorder1886-windows.zip.sha256
+          cat theorder1886-windows.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: theorder1886-windows
+          path: |
+            dist/theorder1886-windows.zip
+            dist/theorder1886-windows.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  smoke:
+    name: Open the package without MSYS2
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: theorder1886-windows
+          path: dist
+      - name: Verify the checksum and run the smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $line = (Get-Content dist/theorder1886-windows.zip.sha256 -TotalCount 1).Trim()
+          $expected = ($line -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash dist/theorder1886-windows.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($expected -ne $actual) { throw "sha256 mismatch: $expected vs $actual" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging/windows/smoke-test.ps1 dist/theorder1886-windows.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  publish:
+    name: Publish the test pre-release
+    needs: [check-tag, smoke]
+    if: needs.check-tag.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: theorder1886-windows
+          path: dist
+      - name: Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          issue=$(sed -nE 's/.*-issue([0-9]+)-test[0-9]+$/\1/p' <<<"$TAG")
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            notes="Windows test build of commit \`${GITHUB_SHA::7}\`, not a final release. Extract \`theorder1886-windows.zip\` and run \`The Order 1886.exe\`."
+            if [[ -n "$issue" ]]; then
+              notes+=$'\n\n'"Please retest and reply in #$issue: your Windows and GPU/driver, whether it starts, and the last lines of \`user/last_run.log\` (redact private paths)."
+            fi
+            notes+=$'\n\n'"SHA-256: \`$(cut -d' ' -f1 dist/theorder1886-windows.zip.sha256)\`"
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "Windows test build $TAG" --notes "$notes"
+          fi
+          gh release upload "$TAG" dist/theorder1886-windows.zip dist/theorder1886-windows.zip.sha256 --clobber

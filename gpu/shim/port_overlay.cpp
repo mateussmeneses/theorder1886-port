@@ -10,12 +10,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <thread>
 #include <vector>
 
 #include <SDL3/SDL.h>
 #include "port_settings.h"
 #include "port_graphics.h"
 #include "port_perf_stats.h"
+#include "../theordergpu.h"
 
 extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
 #include "common/elf_info.h"
@@ -58,6 +60,7 @@ namespace {
 std::mutex imgui_mutex; // the ImGui context: window thread (input) and present thread
 bool initialized = false;
 std::atomic<bool> menu_open{false};
+std::atomic<bool> exit_requested{false}; // Game tab > Exit to Desktop, confirmed
 bool r3_down = false, l2_down = false;
 std::atomic<bool> loading{false};
 std::atomic<u32> loading_done{0}, loading_total{0};
@@ -530,6 +533,52 @@ void OverlayTab() {
     }
 }
 
+void GameTab() {
+    auto& s = PortSettings::Get();
+    ImGui::SeparatorText("Game");
+    if (BeginRows("##game")) {
+        CheckRow("Pause the game", s.pause_game, "The game stops while this menu is open.");
+        ImGui::EndTable();
+    }
+    ImGui::SeparatorText("Audio");
+    if (BeginRows("##audio")) {
+        SliderRow("Master volume", s.master_volume, PortSettings::MasterVolumeMin, PortSettings::MasterVolumeMax,
+                  "%d%%", "100% is the game's own mix; more is boosted behind a soft limiter.");
+        static const char* const speaker_labels[] = {"Automatic (the device's)", "Stereo", "5.1", "7.1"};
+        static const int speaker_values[] = {PortSettings::AudioChannelsAuto, PortSettings::AudioStereo,
+                                             PortSettings::Audio51, PortSettings::Audio71};
+        ChoiceRow("Speakers (applied on restart)", s.audio_channels, speaker_labels, speaker_values, 4,
+                  "Layout of the game's 7.1 sound. Automatic follows the playback device.");
+        ImGui::EndTable();
+    }
+    ImGui::SeparatorText("Session");
+    if (BeginRows("##session")) {
+        // In the value column like every other row, so the d-pad and arrow keys reach it from the
+        // rows above (a button in the label column was skipped on the way to Close).
+        Row("Leave the game");
+        if (ImGui::Button("Exit to Desktop", ImVec2(-FLT_MIN, 0.0f))) {
+            ImGui::OpenPopup("Exit to Desktop?");
+        }
+        Help("Closes the game, as closing the window does. Progress since the last save is lost.");
+        if (ImGui::BeginPopupModal("Exit to Desktop?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted("Progress since the last save is lost.");
+            if (ImGui::Button("Exit")) {
+                // Leaves at the start of the next Render, outside imgui_mutex: the window thread
+                // keeps handling events while the shader cache drains.
+                exit_requested = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+                ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+        ImGui::EndTable();
+    }
+}
+
 void ControlsTab() {
     auto& s = PortSettings::Get();
     ImGui::SeparatorText("Active Input");
@@ -616,7 +665,7 @@ void Menu() {
     }
     const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f;
     if (ImGui::BeginTabBar("##tabs")) {
-        static const char* const tabs[TabCount] = {"Image", "Performance", "Overlay", "Controls"};
+        static const char* const tabs[TabCount] = {"Image", "Performance", "Overlay", "Controls", "Game"};
         for (int tab = 0; tab < TabCount; ++tab) {
             const ImGuiTabItemFlags flags = requested_tab == tab ? ImGuiTabItemFlags_SetSelected : 0;
             if (!ImGui::BeginTabItem(tabs[tab], nullptr, flags)) {
@@ -626,7 +675,9 @@ void Menu() {
                 s.menu_tab = tab;
                 dirty = true;
             }
-            if (ImGui::BeginChild("##body", ImVec2(0, -footer))) {
+            // NavFlattened: the d-pad and arrow keys go from the tab bar into the rows and on to Close;
+            // without it they skipped the whole body (a separate navigation window).
+            if (ImGui::BeginChild("##body", ImVec2(0, -footer), ImGuiChildFlags_NavFlattened)) {
                 const float scroll = ImGui::GetKeyMagnitude2d(ImGuiKey_GamepadRStickLeft,
                     ImGuiKey_GamepadRStickRight, ImGuiKey_GamepadRStickUp, ImGuiKey_GamepadRStickDown).y;
                 if (last_active_input != ActiveInput::Keyboard && scroll != 0.0f &&
@@ -639,7 +690,8 @@ void Menu() {
                 case 0: ImageTab(); break;
                 case 1: PerformanceTab(); break;
                 case 2: OverlayTab(); break;
-                default: ControlsTab(); break;
+                case 3: ControlsTab(); break;
+                default: GameTab(); break;
                 }
             }
             ImGui::EndChild();
@@ -1183,6 +1235,27 @@ bool CapturesInput() {
     return menu_open || text_entry_active || choice_active;
 }
 
+bool GamePaused() {
+    return PortSettings::Get().pause_game && menu_open && !loading;
+}
+
+void WaitWhilePaused(const char* who) {
+    // The game's own thread stops here, between two frames: its clock goes on, and the game takes
+    // the gap as one long frame, as after a load.
+    if (!GamePaused()) {
+        return;
+    }
+    // One counter per caller kind (frames, sound): the first pauses of each are logged.
+    static std::atomic<unsigned> logged_frame{0}, logged_sound{0};
+    auto& logged = who && who[0] == 's' ? logged_sound : logged_frame;
+    if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
+        std::printf("Overlay: game paused while the menu is open (%s)\n", who ? who : "frame");
+    }
+    while (GamePaused()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
 void BeginChoice(const std::string& title, const std::vector<std::string>& items,
                  std::vector<PortPng::Image> pictures, int focus) {
     std::scoped_lock lock{imgui_mutex};
@@ -1216,6 +1289,10 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
     }
     ConfirmRestart();
+    if (exit_requested) {
+        PortSettings::Save();
+        theordergpu_exit_to_desktop();
+    }
     if (!Visible()) {
         return;
     }

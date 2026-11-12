@@ -15,6 +15,7 @@
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
+#include "port_overlay.h"
 #include "common/assert.h"
 #include "port_toggles.h"
 #include "port_settings.h"
@@ -800,6 +801,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     // port: with a frame limit (uncapped presets) a queued flip is presented as soon as it
     // arrives and its slot allows, between vblanks, instead of on the next vblank tick.
     bool immediate_flips = true;
+    auto next_paused_draw = std::chrono::steady_clock::now();
 
     while (!token.stop_requested()) {
         if (const u32 limit = current_limit(); limit != frame_limit) {
@@ -817,7 +819,6 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             timer.End();
             continue;
         }
-
         // Check if it's time to take a request.
         auto& vblank_status = main_port.vblank_status;
         const auto now = std::chrono::steady_clock::now();
@@ -832,6 +833,13 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     if (!main_port.is_open) {
                         DrawBlankFrame();
                     } else if (ImGui::Core::MustKeepDrawing()) {
+                        DrawLastFrame();
+                    } else if (PortOverlay::GamePaused() && now >= next_paused_draw) {
+                        // port (SpartanPort 6853390): the game waits while the in-game menu
+                        // pauses it (PortOverlay::WaitWhilePaused): its last frame is drawn
+                        // again, about 60 times a second, for the menu over it. Vblanks go on
+                        // being counted and signalled below.
+                        next_paused_draw = now + std::chrono::milliseconds(16);
                         DrawLastFrame();
                     }
                 }

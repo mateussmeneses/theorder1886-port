@@ -323,6 +323,9 @@ static ABI int32_t audio_close(int32_t handle) {
 }
 /* `pace`: wait for this port's next period. sceAudioOutOutputs waits once for all its ports. */
 static int32_t output_port(int32_t handle, const void *data, int pace) {
+    /* port (SpartanPort 6853390): the in-game menu pauses the game: its sound waits with it,
+       before any lock (the cadence restarts after the gap). */
+    if (pace) theordergpu_wait_while_paused();
     int32_t error=0;
     pthread_mutex_lock(&table_lock);
     Port *p=port_of(handle,&error);

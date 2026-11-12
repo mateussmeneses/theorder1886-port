@@ -2,6 +2,9 @@
 #include "../gpu/theordergpu.h"
 #include "../gpu/shim/port_overlay.cpp"
 
+// The menu's Exit to Desktop (theordergpu.cpp) is not reached here.
+extern "C" void theordergpu_exit_to_desktop(void) { std::abort(); }
+
 namespace Core {
 class Emulator {
 public:
@@ -16,11 +19,12 @@ public:
 };
 }
 
-static void Check(bool condition) {
+static void CheckAt(bool condition, int line) {
     if (condition) return;
-    std::fputs("FAIL: overlay input isolation\n", stderr);
+    std::fprintf(stderr, "FAIL: overlay input isolation (line %d)\n", line);
     std::exit(1);
 }
+#define Check(condition) CheckAt((condition), __LINE__)
 
 static void Key(SDL_Keycode key, bool down) {
     SDL_Event event{};
@@ -255,8 +259,72 @@ int main() {
     previous_tab.key.mod = SDL_KMOD_NONE;
     PortOverlay::HandleEvent(previous_tab);
     MenuFrame();
+    // The Game tab (index 4) renders; the open menu pauses the game unless pause_game is off or
+    // a loading screen is up (SpartanPort 6853390).
+    PortOverlay::requested_tab = 4;
+    MenuFrame();
+    Check(PortSettings::Get().menu_tab == 4);
+    Check(PortOverlay::GamePaused());
+    PortSettings::Get().pause_game = false;
+    Check(!PortOverlay::GamePaused());
+    PortOverlay::WaitWhilePaused(); // returns at once
+    PortSettings::Get().pause_game = true;
+    PortOverlay::loading = true;
+    Check(!PortOverlay::GamePaused());
+    PortOverlay::loading = false;
+    Check(PortOverlay::GamePaused());
+    {
+        // A game thread really stops in WaitWhilePaused while the menu is open, and goes on once
+        // it closes (the flip and sound entry points call it).
+        std::atomic<bool> resumed{false};
+        std::thread game([&] {
+            PortOverlay::WaitWhilePaused("frame");
+            resumed = true;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        Check(!resumed);
+        PortOverlay::SetOpen(false);
+        for (int i = 0; i < 200 && !resumed; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        Check(resumed);
+        game.join();
+        PortOverlay::SetOpen(true);
+        PortOverlay::requested_tab = 4;
+        MenuFrame();
+    }
+    {
+        // Exit to Desktop is reachable with the arrow keys / d-pad. Enter asks the question; Escape
+        // cancels it and leaves the menu open.
+        const auto press = [](SDL_Keycode key) {
+            Key(key, true);
+            MenuFrame();
+            Key(key, false);
+            MenuFrame();
+        };
+        PortOverlay::SetOpen(false); // opened afresh, as with Insert in the game
+        PortOverlay::SetOpen(true);
+        PortOverlay::requested_tab = 4;
+        MenuFrame();
+        MenuFrame();
+        // From Close (the first focus): up to the tab bar, then down through Pause the game,
+        // Master volume and Speakers to Exit to Desktop. The body is NavFlattened: without it the
+        // arrows went from the tab bar straight to Close.
+        press(SDLK_UP);
+        for (int i = 0; i < 4; ++i) {
+            press(SDLK_DOWN);
+        }
+        Check(ImGui::GetTopMostPopupModal() == nullptr);
+        press(SDLK_RETURN);
+        ImGuiWindow* modal = ImGui::GetTopMostPopupModal();
+        Check(modal && std::strstr(modal->Name, "Exit to Desktop?"));
+        press(SDLK_ESCAPE);
+        Check(ImGui::GetTopMostPopupModal() == nullptr);
+        Check(PortOverlay::menu_open);
+    }
     PortOverlay::dirty = false;
     PortOverlay::SetOpen(false);
+    Check(!PortOverlay::GamePaused());
     Gamepad(false, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
     Trigger(true);
     SDL_Event focus_lost{};

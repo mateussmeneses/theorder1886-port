@@ -42,6 +42,14 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 /// The menu is open or a text entry is shown: the game's input is held neutral.
 bool CapturesInput();
 
+/// port (SpartanPort 6853390): the menu is open and the player keeps the game stopped meanwhile
+/// (PortSettings::pause_game), outside a loading screen. The present thread draws the last
+/// frame again for the menu over it.
+bool GamePaused();
+
+/// Game threads, where they hand in a frame or a sound buffer: waits while GamePaused().
+void WaitWhilePaused(const char* who = "frame");
+
 /// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
 /// `active` is false; typing goes to the window (sdl_window), the box only displays it.
 void SetTextEntry(bool active, const std::string& prompt, const std::string& text);

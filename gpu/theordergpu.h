@@ -27,6 +27,10 @@ int theordergpu_audio_volume_percent(void);
 /* Speaker layout for the game's 7.1 audio (theorder.ini audio_channels, THEORDER_AUDIO_CHANNELS):
  * 0 automatic (the device's), 1 stereo, 2 5.1, 3 7.1. Read when an audio port is opened. */
 int theordergpu_audio_channels(void);
+/* Game threads (audio output): returns once the in-game menu no longer pauses the game. */
+void theordergpu_wait_while_paused(void);
+/* The menu's Exit to Desktop: the same as closing the window (report, shader-cache flush, exit). */
+void theordergpu_exit_to_desktop(void);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t theordergpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */

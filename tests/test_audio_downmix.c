@@ -14,6 +14,7 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 /* The menu's settings, as theordergpu.cpp would serve them. */
 static int stub_volume=100, stub_mode=MODE_AUTO;
 int theordergpu_audio_volume_percent(void) { return stub_volume; }
+void theordergpu_wait_while_paused(void) {}
 int theordergpu_audio_channels(void) { return stub_mode; }
 
 static int near(float a, float b) { return fabsf(a-b)<1e-3f; }

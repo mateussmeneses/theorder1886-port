@@ -43,8 +43,8 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 5120, 1600, 3440,
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 1440, 900, 1440, 1080};
 inline constexpr int OutputCount = 8;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
-/// The in-game menu's tabs: Image, Performance, Overlay, Controls.
-inline constexpr int MenuTabCount = 4;
+/// The in-game menu's tabs: Image, Performance, Overlay, Controls, Game.
+inline constexpr int MenuTabCount = 5;
 
 struct Values {
     std::atomic<int> upscaler{UpscalerFsr3};
@@ -71,6 +71,8 @@ struct Values {
     std::atomic<bool> vsync{true};
     std::atomic<int> fps_limit{0};
     std::atomic<bool> async_shaders{true};
+    /// Whether the game stops while the in-game menu is open (PortOverlay::GamePaused).
+    std::atomic<bool> pause_game{true};
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{true};
     std::atomic<int> rcas_strength{75};

@@ -120,6 +120,8 @@ On a controller without a touchpad, View (Back) is the right touchpad click.
 
 The port's menu (Insert) holds the display, field of view, mouse, frame limit and performance
 overlay settings. The field of view (50-200%) changes live; above 100% shows more on every side.
+Its Game tab holds the master volume (0-200%), the speaker layout (automatic, stereo, 5.1, 7.1),
+Exit to Desktop, and *Pause the game*: on by default, the game stops while the menu is open.
 
 ## Patches
 

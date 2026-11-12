@@ -6,8 +6,16 @@
 # The version bump, docs/release-notes-vVERSION.md and docs/REVIEW_vVERSION.md come first, in a
 # reviewed PR merged to master (AGENTS.md). Nothing is published until every step has passed;
 # DRY_RUN=1 stops before the tag.
+# RETEST_ISSUES="<numbers>" labels the issues this release fixes for their reporters' retest.
 set -euo pipefail
 cd -- "$(dirname -- "$0")/.."
+# Git for Windows (core.autocrlf=true in its system config) and the GitHub CLI first: MSYS2's own
+# git has no autocrlf, so every CRLF checkout looked modified and the clean-tree check failed; and
+# the login shell's PATH has no gh. (Seen on the v0.9.0 release.)
+for tool_dir in "/c/Program Files/Git/cmd" "/c/Program Files/GitHub CLI"; do
+    [[ -d $tool_dir ]] && PATH="$tool_dir:$PATH"
+done
+export PATH
 version=${1:?usage: tools/release.sh VERSION GAME_DIR}
 game_dir=${2:?usage: tools/release.sh VERSION GAME_DIR}
 tag="windows-v$version"
@@ -56,8 +64,10 @@ title=$(head -1 "$notes" | sed 's/^# //')
 gh release create "$tag" dist/theorder1886-windows.zip dist/theorder1886-windows.zip.sha256 \
     --title "$title" --notes-file "$notes"
 
-# 6. Issues the notes mention: label them for retest (the retest comment is written per issue).
-for issue in $(grep -oE '#[0-9]+' "$notes" | tr -d '#' | sort -un); do
+# 6. The issues this release fixes, waiting for their reporters: RETEST_ISSUES="113 99" labels them
+# for retest (the retest comment is written per issue). Not every issue the notes mention: they
+# also list open problems and other projects' issue numbers (v0.9.0 named #138 and SpartanPort's #1101).
+for issue in ${RETEST_ISSUES:-}; do
     gh issue edit "$issue" --add-label status:needs-retest >/dev/null 2>&1 &&
         echo "labelled #$issue status:needs-retest (post the retest request in the thread)"
 done

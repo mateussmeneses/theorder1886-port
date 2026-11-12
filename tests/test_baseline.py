@@ -72,6 +72,9 @@ class ParserTests(unittest.TestCase):
             self.assertFalse(failed['ok'])
             missing = baseline.parse_run(record, Path(tmp) / 'nope.csv', {})
             self.assertIsNone(missing['frames'])
+            csv_path.write_text('')  # the game stopped before its first frame
+            stopped = baseline.parse_run({**record, 'run_state': 'STOP ram'}, csv_path, {})
+            self.assertEqual((stopped['ok'], stopped['frames']), (False, None))
 
 
 def fake_summary(tag, p99s, fails=0):

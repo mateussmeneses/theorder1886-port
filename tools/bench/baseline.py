@@ -123,7 +123,8 @@ def parse_run(record, frame_csv, window):
            'binary_hits': binary.get('hits'), 'binary_compiled': binary.get('compiled'),
            'gpu': measurements.get('gpu'), 'driver': measurements.get('driver')}
     frames = None
-    if frame_csv and Path(frame_csv).is_file():
+    # an empty trace is a game that stopped before its first frame (e.g. the RAM guard): no frames
+    if frame_csv and Path(frame_csv).is_file() and Path(frame_csv).stat().st_size:
         frames = frame_metrics(select_window(read_frame_ms(frame_csv), window))
     run['frames'] = frames
     if frames:

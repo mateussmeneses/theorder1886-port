@@ -80,8 +80,10 @@ python run.py
 
 ### Opções do motor
 
-Estas opções existem no executável do jogo e o `run.py` as repassa. O efeito delas na versão
-comercial ainda não foi verificado: com `--level`, o jogo continua parando na tela de título.
+Estas opções existem no executável do jogo e o `run.py` as repassa. `--level` inicia o jogo no
+nível indicado (desde a v0.9.1; quatro níveis conferidos na CUSA00035 01.02, nomes completos em
+`docs/ENGINE_RE.md`). Com `--level`, as opções de tecido, câmera e MSAA abaixo ficam de fora: o
+efeito delas na versão comercial não foi verificado.
 
 | `run.py` | Opção do jogo |
 |---|---|

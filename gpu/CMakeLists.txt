@@ -137,6 +137,8 @@ add_host_shader(post_process.frag post_process_frag)
 add_host_shader(camera_motion.comp camera_motion_comp)
 add_host_shader(upscale_merge.comp upscale_merge_comp)
 add_host_shader(upscale_reactive.comp upscale_reactive_comp)
+add_host_shader(fg_depth.comp fg_depth_comp)
+add_host_shader(fg_hud.comp fg_hud_comp)
 add_host_shader(taa.comp taa_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
@@ -194,7 +196,8 @@ target_compile_options(theordergpu PRIVATE -Wno-deprecated-declarations -Wno-mis
 if (NOT WIN32)
     target_link_options(theordergpu PRIVATE -Wl,--allow-shlib-undefined)
 endif()
-target_link_libraries(theordergpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan)
+target_link_libraries(theordergpu PRIVATE ffx-vulkan::portable ffx-vulkan::fsr4-v07-vulkan
+    ffx-vulkan::fsr3-vk-framegeneration-3.1.6)
 target_link_libraries(theordergpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
     tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
 target_include_directories(theordergpu PRIVATE third_party/xbyak)
@@ -460,6 +463,11 @@ target_link_libraries(blend-rewrite-test PRIVATE Vulkan::Headers fmt::fmt Boost:
 if(NOT WIN32)
     set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
 endif()
+add_executable(frame-generation-test EXCLUDE_FROM_ALL ../tests/test_frame_generation.cpp
+    shadps4/video_core/renderer_vulkan/frame_generation_policy.cpp)
+target_compile_options(frame-generation-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(frame-generation-test PRIVATE .. shadps4)
+
 add_executable(ui-language-test EXCLUDE_FROM_ALL ../tests/test_ui_language.cpp)
 target_compile_options(ui-language-test PRIVATE -UNDEBUG)
 target_include_directories(ui-language-test PRIVATE shim)
@@ -566,6 +574,18 @@ add_executable(ui-composition-test EXCLUDE_FROM_ALL ../tests/test_ui_composition
 target_compile_options(ui-composition-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(ui-composition-test PRIVATE ..)
 
+add_executable(frame-generation-runtime-test EXCLUDE_FROM_ALL
+    ../tests/test_frame_generation_runtime.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(frame-generation-runtime-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_options(frame-generation-runtime-test PRIVATE -UNDEBUG -fPIC)
+set_source_files_properties(../tests/test_frame_generation_runtime.cpp PROPERTIES
+    COMPILE_OPTIONS "-fvisibility=hidden;-fvisibility-inlines-hidden")
+target_link_libraries(frame-generation-runtime-test PRIVATE theordergpu)
+add_executable(fg-motion-shader-test EXCLUDE_FROM_ALL ../tests/test_fg_motion_shader.cpp)
+target_include_directories(fg-motion-shader-test PRIVATE ${SHADER_INCLUDE})
+target_compile_options(fg-motion-shader-test PRIVATE -UNDEBUG)
+target_link_libraries(fg-motion-shader-test PRIVATE Vulkan::Vulkan GPUOpen::VulkanMemoryAllocator)
+add_dependencies(fg-motion-shader-test host_shaders)
 add_executable(scene-resolution-test EXCLUDE_FROM_ALL ../tests/test_scene_resolution.cpp ../tests/test_gpu_runtime_stubs.cpp)
 target_include_directories(scene-resolution-test PRIVATE shim shadps4 third_party/gcn/include)
 # The test's Vulkan-Hpp inline methods have a different set of platform extensions
@@ -643,7 +663,7 @@ target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan:
 # port: renderer tests that link theordergpu with the runtime stubs reach the guarded guest
 # descriptor reads (gpu/shim/port_guest_memory.h), whose recovery point is port_setjmp.
 if (WIN32)
-    foreach(test buffer-addr64-test buffer-inline-test camera-motion-test compute-pipeline-reuse-test formatted-ssbo-barriers-test indirect-index-clamp-gpu-test motion-shader-test multiwave-barriers-test overlay-input-test scene-resolution-test shader-resource-test taa-shader-test)
+    foreach(test frame-generation-runtime-test buffer-addr64-test buffer-inline-test camera-motion-test compute-pipeline-reuse-test formatted-ssbo-barriers-test indirect-index-clamp-gpu-test motion-shader-test multiwave-barriers-test overlay-input-test scene-resolution-test shader-resource-test taa-shader-test)
         target_sources(${test} PRIVATE ../src/compat_win.c)
         target_link_libraries(${test} PRIVATE onecore)
     endforeach()

@@ -482,6 +482,15 @@ void PerformanceTab() {
                  "Big FPS gain. Switch it off if lighting or objects look wrong.");
         CheckRow("Deferred GPU readbacks", s.deferred_readback,
                  "Fewer waits for the GPU. Switch it off if textures or shadows look wrong.");
+        // port (SpartanPort 8192bbb): a generated frame between every two real ones.
+        static const char* const fg_labels[] = {"Off", "AMD FSR 3.1 (2x)"};
+        ChoiceRow("Frame generation", s.frame_generation, fg_labels, nullptr, 2,
+                  "Shows a generated frame between every two real ones: twice the frames on screen, "
+                  "slightly more input delay. Works with an upscaler on (FSR, TAA or DLSS).");
+        if (s.startup_frame_generation != 0) {
+            const char* status = s.fg_status.load();
+            InfoRow("Frame generation status", status ? status : "waiting for an upscaled frame");
+        }
         ImGui::EndTable();
     }
 }
@@ -663,7 +672,8 @@ void ControlsTab() {
 int RestartChanges() {
     const auto& s = PortSettings::Get();
     return (s.aspect != s.startup_aspect) + (s.engine_fps != s.startup_engine_fps) +
-           (s.deferred_readback != s.startup_deferred_readback) + (s.stale_readback != s.startup_stale_readback);
+           (s.deferred_readback != s.startup_deferred_readback) + (s.stale_readback != s.startup_stale_readback) +
+           (s.frame_generation != s.startup_frame_generation);
 }
 
 void Menu() {

@@ -22,6 +22,7 @@
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 #include "video_core/renderer_vulkan/vk_dlss.h"
+#include "video_core/renderer_vulkan/vk_frame_generation.h"
 #include "video_core/renderer_vulkan/vk_fsr4.h"
 #include "video_core/texture_cache/image.h"
 
@@ -41,6 +42,10 @@ class SceneTargets;
 
 class TemporalUpscaler {
 public:
+    /// port: frame generation (the presenter asks it for the in-between frame).
+    [[nodiscard]] FrameGeneration& GetFrameGeneration() noexcept {
+        return *frame_generation;
+    }
     TemporalUpscaler(const Instance& instance, Scheduler& scheduler,
                      VideoCore::TextureCache& texture_cache, Runtime& runtime,
                      CameraMotion& camera_motion, SceneTargets& scene_targets);
@@ -255,6 +260,8 @@ private:
     bool resources_fsr4 = false;  ///< made for FSR 4 (no FSR 3 context)
     bool resources_taa = false;
     std::unique_ptr<Fsr4Upscaler> fsr4;
+    /// port (SpartanPort 8192bbb): AMD FSR 3.1 frame generation 2x, fed after each upscale.
+    std::unique_ptr<FrameGeneration> frame_generation;
     bool fsr4_failed = false;
     bool dlss_failed = false;
     VideoCore::UniqueImage motion_image;

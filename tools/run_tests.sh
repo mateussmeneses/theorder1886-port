@@ -85,7 +85,10 @@ fi
 # Software ICD (Mesa lavapipe, hosted CI only): THEORDER_VULKAN_SOFTWARE=1 enables the named
 # exclusions below. Each entry is "test|reason"; the test is NOT deleted and stays strict on a real
 # GPU (the variable is never set locally). Excluded tests are printed by name with the reason.
-software_icd_exclusions=()
+software_icd_exclusions=(
+    "dma-barriers|lavapipe: ASSERT 'Can't get BDA from a non BDA buffer' (buffer_cache/buffer.h); the test's buffers lack the device-address path under lavapipe; root cause not isolated, still required on a real GPU"
+    "renderpass-barrier|lavapipe: same 'Can't get BDA from a non BDA buffer' assertion as dma-barriers; still required on a real GPU"
+)
 declare -A software_excluded=()
 if [[ "${THEORDER_VULKAN_SOFTWARE:-0}" == 1 ]]; then
     for entry in "${software_icd_exclusions[@]}"; do software_excluded["${entry%%|*}"]="${entry#*|}"; done

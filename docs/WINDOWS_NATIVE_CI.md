@@ -63,7 +63,18 @@ real-GPU local run is unchanged.
 `THEORDER_VULKAN_SOFTWARE=1` (set only by the workflow) enables the `software_icd_exclusions` list
 in `tools/run_tests.sh`, entries of the form `test|reason`. A listed test is not deleted: it is
 printed as `EXCLUDED (software ICD only)` with the reason and still runs on any real GPU.
-EXCLUSIONS_PLACEHOLDER
+
+| Excluded test | Reason (software ICD only) |
+| --- | --- |
+| `dma-barriers` | Under lavapipe the engine asserts `Can't get BDA from a non BDA buffer` (`buffer_cache/buffer.h`); root cause not yet isolated. |
+| `renderpass-barrier` | Same assertion as `dma-barriers`. |
+
+The other seven device tests execute and pass on lavapipe. Follow-up: find out why those buffers have no
+device address under lavapipe (feature gate versus a real bug) and drop the exclusions.
+
+The hosted runner is elevated, and the Windows Vulkan loader then ignores `VK_DRIVER_FILES`/`VK_ICD_FILENAMES`.
+The test step therefore also registers the lavapipe JSON under `HKLM\SOFTWARE\Khronos\Vulkan\Drivers`
+(ephemeral runner only, removed after the step).
 
 Lavapipe proves the Vulkan API usage, barriers and shader compilation paths; it does **not** prove
 behaviour on a real driver. Graphics fixes and black-screen/stutter work still need an actual GPU run.

@@ -185,9 +185,6 @@ jobs:
           # ignores VK_DRIVER_FILES there, so also register the ICD in the ephemeral runner
           # registry (removed again in the last line of this step).
           MSYS2_ARG_CONV_EXCL='*' reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$icd" /t REG_DWORD /d 0 /f /reg:64
-          ldd "$MINGW_PREFIX/bin/vulkan_lvp.dll" || true
-          clang -std=c11 tests/vulkan_device_probe.c -o out/lvp-diag-probe -lvulkan-1
-          VK_LOADER_DEBUG=error,warn,driver ./out/lvp-diag-probe 2>&1 | head -60 || true
           start=$SECONDS
           rc=0; bash tools/run_tests.sh || rc=$?
           echo "run_tests.sh wall time: $((SECONDS - start))s (exit $rc)"

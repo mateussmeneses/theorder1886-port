@@ -253,15 +253,21 @@ def heading_text(text, every_language=False):
 # launcher's own settings.json (passed to run.py as environment variables).
 
 INI_FLAGS = {'object_motion', 'show_fps', 'vsync', 'async_shaders', 'deferred_readback',
-             'stale_readback'}
+             'stale_readback', 'pause_game'}
 # The graphics keys are also in the in-game menu (Insert / R3+L2); run.py reads the startup ones.
 INI_DEFAULTS = {'upscaler': 'off', 'preset': '1',
                 'object_motion': '1', 'show_fps': '1', 'output_res': '1920x1080',
                 'live_resolution': 'auto', 'display_mode': 'windowed', 'vsync': '1', 'fps_limit': '0',
                 'async_shaders': '1', 'deferred_readback': '1', 'stale_readback': '1',
                 'aspect_ratio': 'original', 'engine_fps': '120',
-                'frames_queued': '1', 'anisotropy': '0'}
+                'frames_queued': '1', 'anisotropy': '0',
+                'master_volume': '100', 'audio_channels': 'auto', 'pause_game': '1',
+                'frame_generation': 'off'}
 DISPLAY_MODES = [('windowed', ('Windowed',)), ('borderless', ('Borderless',)), ('fullscreen', ('Fullscreen',))]
+MASTER_VOLUMES = [(str(v), (f'{v}%',)) for v in (0, 25, 50, 75, 100, 125, 150, 175, 200)]
+AUDIO_CHANNELS = [('auto', ("Automatic (the device's)",)), ('stereo', ('Stereo',)), ('5.1', ('5.1',)),
+                  ('7.1', ('7.1',))]
+FRAME_GENERATION = [('off', ('Off',)), ('fsr', ('AMD FSR 3.1 (2x, experimental)',))]
 FPS_LIMITS = [('30', ('30',)), ('60', ('60',)), ('120', ('120',)), ('240', ('240',)), ('0', ('Unlimited',))]
 # The sidebar's pages, top to bottom, and the methods that refresh a page's lists when it is shown.
 PAGES = ('home', 'graphics', 'performance', 'game', 'advanced')
@@ -1130,8 +1136,8 @@ class Launcher:
     TAB_KEYS = {
         'home': ['display_mode', 'fps_limit', 'engine_fps', 'aspect_ratio'],
         'graphics': ['display_mode', 'vsync', 'output_res', 'aspect_ratio', 'anisotropy', 'hdr', 'show_fps'],
-        'performance': ['fps_limit', 'frames_queued', 'engine_fps', 'pipeline_binary_cache', 'background_warmup', 'async_shaders', 'parallel_warmup', 'gpu_id', 'stream_memory', 'stale_readback', 'deferred_readback', 'draw_pipe', 'readbacks', 'no_msaa'],
-        'game': ['language', 'mods_enabled', 'pad_style'],
+        'performance': ['fps_limit', 'frames_queued', 'engine_fps', 'frame_generation', 'pipeline_binary_cache', 'background_warmup', 'async_shaders', 'parallel_warmup', 'gpu_id', 'stream_memory', 'stale_readback', 'deferred_readback', 'draw_pipe', 'readbacks', 'no_msaa'],
+        'game': ['language', 'master_volume', 'audio_channels', 'pause_game', 'mods_enabled', 'pad_style'],
         'advanced': ['ui_language', 'close_on_play', 'check_updates', 'vk_validation', 'frame_capture_key', 'perf_diag', 'frame_stats', 'gpu_profile', 'desktop_integration', 'gamemode', 'mangohud'],
     }
 
@@ -1429,6 +1435,10 @@ class Launcher:
                                      _('On-demand mode warms pipelines from recent sessions while you play. With the full cache, '
                                          'this selects background loading instead of a loading screen. Off stops background warm-up; '
                                          'new pipelines still compile when needed.'))
+        self.row(f, _('Frame generation'), self.choice(f, 'frame_generation', 'ini', FRAME_GENERATION),
+                 _('Experimental: a generated frame between every two real ones. Needs the upscaler at a scaled '
+                   'preset, which does not run on this game build yet (issue #138), so for now it only adds '
+                   'latency.'), restart=True, key='frame_generation')
         self.check(f, 'async_shaders', 'ini', _('Compile new shaders in the background'),
                    _('Fewer stutters in new areas: the game keeps running while new shaders compile. An object '
                      'or effect may appear a moment later. Switch it off if something stays missing.'))
@@ -1487,6 +1497,14 @@ class Launcher:
         self.build_save_backups(f)
         self.section(f, _('Language'))
         self.row(f, _('Game language', 'Язык игры'), self.choice(f, 'language', 'app', LANGUAGES))
+        # port (SpartanPort 1e95c7c, 6853390): the same settings as the in-game menu's Game tab.
+        self.section(f, _('Audio'))
+        self.row(f, _('Master volume'), self.choice(f, 'master_volume', 'ini', MASTER_VOLUMES, preserve_unknown=True),
+                 _("100% is the game's own mix; more is boosted behind a soft limiter."), key='master_volume')
+        self.row(f, _('Speakers'), self.choice(f, 'audio_channels', 'ini', AUDIO_CHANNELS),
+                 _("Layout of the game's 7.1 sound. Automatic follows the playback device."), key='audio_channels')
+        self.check(f, 'pause_game', 'ini', _('Pause the game while the menu is open'),
+                   _('The game stops while the in-game menu (Insert / R3+L2) is open.'))
         self.build_patches(f)
         self.build_mods(f)
         self.build_controls(f)

@@ -3,13 +3,15 @@
 Single current-status page (AGENTS.md "Documentation"). Update it in the PR that changes the
 status. History: `docs/PROGRESS.md`; releases: `docs/release-notes-v*.md`.
 
-Last updated: 2026-11-11, after Windows v0.8.3.
+Last updated: 2026-11-12, Windows v0.9.0.
 
 ## Last release
 
-**Windows v0.8.3** (`windows-v0.8.3`): far fewer shader/pipeline compiles after the first
-session (#113, waiting for retest). v0.8.2: Portuguese black screen on editions without its
-language package, damaged shader cache, RAM guard, SRT walker stack fix.
+**Windows v0.9.0** (`windows-v0.9.0`): SpartanPort adoption (`docs/release-notes-v0.9.0.md`):
+menu pause, Game tab (volume, speakers, Exit to Desktop), menu translations, 5.1/7.1 audio,
+trophies kept and shown (waiting for retest), alternative keys, runtime/memory/GPU fixes;
+experimental frame generation, inactive until #138. v0.8.3: far fewer shader/pipeline compiles
+after the first session (#113, waiting for retest).
 
 ## Works (one PC, RTX, CUSA00035 01.02, prologue route)
 
@@ -29,15 +31,13 @@ language package, damaged shader cache, RAM guard, SRT walker stack fix.
 | Chapter 3 crash after the door | #118 | report attached, not read yet |
 | Saved driver pipeline cache empty with pipeline binaries on | #102 | measured (60 bytes); no faster new pipelines when filled |
 | Green/blue artifacts | #63, #39 | needs logs |
+| Temporal upscaler (FSR/TAA/DLSS) never runs | #138 | G-buffer has 3 targets (heuristic wants 5+), camera constants not found on 01.02 |
 
 ## Being worked on
 
-- SpartanPort adoption (`docs/plans/2026-11-11-spartanport-adoption.md`): phases 1 (runtime and
-  memory, #125-#129) and 2 (GPU/Vulkan, #130-#131, #133-#134; window #132) merged; phase 3
-  (audio, #135) and 4 (menu: pause, Game tab, translations, #136-#137) merged. Phase 5: frame
-  generation (FSR 3.1 2x) ported and tested on the GPU, experimental and not verified in game: the
-  temporal upscaler does not run on CUSA00035 01.02 in the tested scenes (#138). Next: #138,
-  then input, launcher.
+- SpartanPort adoption (`docs/plans/2026-11-11-spartanport-adoption.md`): phases 1-7 done
+  (#125-#141). Open: #138 (temporal upscaler inactive on CUSA00035 01.02; frame generation and
+  the upscaler items wait on it); retests of #99/#63 and of trophies.
 
 - Comparison with the other public ports (TOport, DivinusX package), scene by scene:
   `docs/plans/2026-11-11-reference-ports-review.md`. Next: flicker A/B on the same scene in

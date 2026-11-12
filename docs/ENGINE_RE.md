@@ -67,7 +67,7 @@ spaces). Help texts at 0x148a000.. (file offset 0x148e000..):
 | `-noadaptivesync` | disable adaptive VSYNC | |
 | `-msaa msaa_mode` | the MSAA mode to use | |
 | `-disablecloth`, `-nocloth` | disable cloth on game characters | |
-| `-startlevel`, `-startcheckpoint checkpoint_name` | load a level and spawn at a checkpoint | `wch_020` + `wch_020_checkpoint_025`: still the title screen |
+| `-startlevel`, `-startcheckpoint checkpoint_name` | load a level and spawn at a checkpoint | `wch_020` + `wch_020_checkpoint_025`: still the title screen (wrong level name, see "Level start") |
 | `-printfps` | print the frame time in the TTY when over budget | |
 | `-photomode`, `-nogameui`, `-disableuiindicators`, `-gamechaptersonly`, `-usedlc`, `-enablesubtitles`, `-gamma` | | |
 
@@ -84,6 +84,171 @@ builds the sorted table of hashed option names. `-startlevel`/`-startcheckpoint`
 checkpoint before the level starts (virtual call +0x330); without `-startlevel` and
 `-frontend` the game goes to the front end. The port forwards THEORDER_ARGS as separate argv
 entries (probe.c), which this concatenation handles.
+
+## Level start (-startlevel)
+
+Static analysis only (T-020, 2026-11-12); not yet confirmed in a run. Build: CUSA00035 01.02,
+`out/eboot.elf` and `out/eboot_ghidra.exe` (sha256 `0f42dce6…3146f`). Addresses are eboot
+addresses; **file offset = address + 0x4000** for both load segments (program headers: text at
+file 0x4000 -> 0, data at file 0x15c0000 -> 0x15bc000). Verified with `llvm-objdump -d` of
+`out/eboot.elf`, REA/Ghidra pseudocode of `out/eboot_ghidra.exe` (address + 0x100000000), and the
+`R_X86_64_RELATIVE` entries of the dynlib data segment (file 0x166f940..) for vtable slots.
+
+**Conclusion: the tried names were wrong, not the gate.** `-startlevel` wants the full level
+name, `wch_020_slums` or `pro_010_catacombs`, not the checkpoint prefix `wch_020`/`pro_010`.
+The level is selected by the 64-bit hash of the name; `wch_020` hashes to no level. No patch is
+needed for the retail executable to start a level.
+
+Call order (game object, vtable 0x161ae10, stored at 0x44c6d3 by its constructor 0x44c6c0; engine
+base vtable 0x164a5d0, base constructor 0xa88990 sets `+0x30` and `+0x38` to -1):
+- `sub_44cce0` (game vtable slot +0x300, the game's run function) calls slot +0x10 (0x446080,
+  game options), the engine init 0xa82860 and a long list of init slots, then slot +0x18 =
+  **0x447880 once** (call `*0x18(%rax)`), then the frame loop, which calls `sub_44a600` every
+  iteration (0x44e7d3).
+- 0x447880 first calls 0xa81b30 (engine-base slot +0x18, call at 0x4478b0): it handles `-help`,
+  `-nframes`, `-nframespause` and **`-level <name>`**, which loads a level directly with
+  `sub_2b23e0(*0x16b31d8, {hash(name), type 0xb, 30000})` (call at 0xa82200). Without `-level`
+  nothing is loaded there.
+- The gate at 0x4480c0 is `cmpq $0, 0x208(*0x16b31d8)`. `*0x16b31d8` is the level manager
+  (symbol `CGameLevelMgr` in the table; created at 0x442ec8 / 0xa83dfa, base constructor
+  0x2b1580). `+0x1e0` is its array of loaded levels and **`+0x208` its count**: 0x2b1580 zeroes
+  it at 0x2b1954, the only increment is the array push in `sub_2b23e0` (LoadLevel) at 0x2b2891.
+  A scan of every instruction that loads 0x16b31d8 found only reads of `+0x208`. In a normal boot the
+  count is 0 here, because the front end itself is started from inside the same gate. So the
+  gate is true for `-startlevel` too, unless `-level` is also passed.
+- Inside the gate: `-frontend` gives the front end; neither `-startlevel` nor `-frontend` also
+  gives the front end: level = `*(*(game+0x7a8)+0x198)`, checkpoint = `**(*(game+0x7a8)+0x160)`
+  (0x4483b7..0x4483d3). With `-startlevel` and without `-frontend`, `sceSystemServiceHideSplashScreen`
+  is called, the level string is copied into a 256-byte buffer, every `.radlvl` (string at
+  0x1489f22, used at 0x4497a3) is removed, the name is hashed and stored at `game+0x30`, and the
+  hash of the `-startcheckpoint` value, or the default checkpoint value (global 0x16da298), at
+  `game+0x38` (0x4499ad, 0x4499b1). Both paths end in the virtual call `+0x330` at 0x448423.
+- Slot +0x330 of the game is 0x450710: it clears bit 0x20000 of `+0x7dc`, sets the transition
+  state `game+0xc78 = 0`, saves a timestamp in `+0xc58` and sets global 0x15c0d54 = 2. With
+  argument 0, as here, it does not run the state machine itself.
+- `sub_44a600` is the level-transition state machine (state at `game+0xc78`, 0..0xf; 0xf is
+  done). State 4 compares `game+0x30` against a table built at run time at 0x16da670: the hashes
+  of `mnu_010_begin` (the front end), `pro_010_catacombs`, `pro_020_westminster`,
+  `pro_210_flashbacks`, `emb_020_tunnels`; other levels first go through a step that compares
+  global 0x16da298 with the hash of `plr_prisoner`. **State 7 loads the level**:
+  `sub_2b37b0(levelMgr, {game+0x30, game+0x38, 30000, type 0x19})` unless a level with that hash
+  (`level+0x260`) is already loaded. State 9 spawns: if `game+0x38` is the default value, the
+  level's own default checkpoint (level vtable +0x200), else level vtable +0x208.
+
+Hash (options, levels, checkpoints): `h = ~0; for each byte c (A-Z lowered, sign-extended):
+h = (h << 8) ^ T[h >> 56] ^ c`; leading '-' of option names is skipped. `T` is all zero in the
+file except `T[0]` and is generated in `main` (0x2983d7..0x29861d): `t = i&0x80 ? 2K : 0; for
+bit in 0x40..0x01: if (i & bit) t ^= K; t <<= 1` with `K = 0x15ac9329ac4bc9b5` (constants at
+0xf11d60..0xf11e80, file 0xf15d60..). Checked: this reproduces all 4129 8-byte hashes stored
+beside the `RaDsSyMbOlPrEfIx<name>` records between 0x1489000 and 0x14c0000 (dashes kept for
+record names; only the option lookup skips them), including all 244 level and checkpoint names.
+
+The record layout: 16 bytes of the `RaDsSyMbOlPrEfIx` prefix, with the name's hash overwriting
+the 8-aligned qword inside it, then the NUL-terminated name. The code reads a hash with
+`leaq <record>(%rip); andq $-8; movq (%rax)` (for example 0x442e19). The per-level loadout list
+(`R7LevelLoadout`, `CR7LevelLoadoutList`) is just before the level names, so a level started
+this way probably gets its own starting inventory (not verified). `-startinventory` (read
+right after the gate) adds weapons by hash.
+
+Levels (record address; the name string is 16 bytes further on) and the checkpoints whose name
+starts with the same `<area>_<nnn>`:
+
+| Level (`-startlevel`) | Record at | Checkpoints `<area>_<nnn>_checkpoint_NNN` |
+|---|---|---|
+| `pro_020_westminster` | 0x148b3e9 | 005 010 030 |
+| `may_010_intro` | 0x148b40d | 010 020 |
+| `may_020_plaza` | 0x148b42b | 010 020 030 040 |
+| `may_035_street_end` | 0x148b449 | 010 020 |
+| `may_040_atrium` | 0x148b46c | 010 030 060 |
+| `may_050_courtyard` | 0x148b48b | 010 |
+| `may_060_underground` | 0x148b4ad | 010 020 040 |
+| `may_070_chase` | 0x148b4d1 | 010 |
+| `may_100_mopup` | 0x148b4ef | 010 |
+| `wmp_010_roundtable` | 0x148b50d | 010 015 |
+| `wmp_020_lobby` | 0x148b530 | 010 |
+| `tsl_020_teslaslab` | 0x148b54e | 010 020 030 035 |
+| `wch_010_arrival` | 0x148b570 | 005 010 |
+| `wch_020_slums` | 0x148b590 | 005 015 025 |
+| `wch_030_brothel` | 0x148b5ae | 010 015 |
+| `wch_070_rooftops` | 0x148b5ce | 010 015 |
+| `wch_080_ambush` | 0x148b5ef | 005 010 013 |
+| `wch_090_escape` | 0x148b60e | 005 |
+| `wch_100_clotheslines` | 0x148b62d | 010 015 017 |
+| `wch_105_cellar` | 0x148b652 | 005 |
+| `wch_110_square` | 0x14afc9d | 010 030 040 |
+| `wch_115_tracks` | 0x14afcbc | 020 030 040 |
+| `wch_120_mainstreet` | 0x148b671 | 005 010 020 |
+| `wch_125_shortcut` | 0x148b694 | 020 040 |
+| `wch_130_hospitalupper` | 0x148b6b5 | 010 020 |
+| `wch_140_hospitallower` | 0x148b6db | 010 |
+| `wch_150_bossfight` | 0x148b701 | 005 010 070 |
+| `wch_160_psycward` | 0x148b723 | 010 020 |
+| `wch_170_exit` | 0x148b744 | - |
+| `air_010_rappel` | 0x14afcdb | 005 010 |
+| `air_020_engineering` | 0x14afcfa | 005 007 010 |
+| `air_030_cockpit` | 0x14afd1e | 005 015 |
+| `air_040_crew` | 0x14afd3e | 010 |
+| `air_045_catwalks` | 0x14afd5b | - |
+| `air_050_ballroom` | 0x14afd7c | - |
+| `air_055_foyer` | 0x14afd9d | 001 007 010 |
+| `air_060_propeller` | 0x14afdbb | - |
+| `air_065_exterior` | 0x14afddd | - |
+| `air_070_lifeboats` | 0x14afdfe | 010 017 |
+| `air_075_kitchen` | 0x14afe20 | 010 017 |
+| `air_080_lounge` | 0x148b761 | 010 |
+| `air_090_bar` | 0x148b780 | 025 |
+| `air_110_death` | 0x148b79c | 010 015 |
+| `tsl_220_teslaslab` | 0x148b7ba | 010 |
+| `wmp_210_roundtable` | 0x148b7dc | 010 015 |
+| `frl_010_bridgewest` | 0x148b7ff | 010 020 030 033 |
+| `frl_020_bridgeeast` | 0x148b822 | 005 013 |
+| `wch_210_brothelreturn` | 0x148b845 | 010 015 |
+| `wch_220_brothelexit` | 0x148b86b | 010 |
+| `bwy_010_tunnel` | 0x148b88f | 010 020 030 040 050 060 070 |
+| `bwy_020_escort` | 0x148b8ae | 010 020 040 050 |
+| `bwy_025_foundry` | 0x148b8cd | 010 020 |
+| `bwy_030_follow` | 0x148b8ed | 010 020 |
+| `bwy_040_drydock` | 0x148b90c | 010 030 040 070 |
+| `bwy_045_lowerdecks` | 0x148b92c | 010 |
+| `bwy_050_warehouse` | 0x148b94f | 010 020 030 040 |
+| `bwy_055_annex` | 0x148b971 | 005 010 |
+| `bwy_060_escape` | 0x148b98f | 010 |
+| `wmp_320_lobby` | 0x148b9ae | 010 |
+| `wmp_310_roundtable` | 0x148b9cc | 010 |
+| `eih_010_streets` | 0x148b9ef | 010 013 |
+| `eih_020_rooftops` | 0x148ba0f | 005 010 |
+| `eih_030_back` | 0x148ba30 | 010 |
+| `eih_035_house` | 0x148ba4d | 010 |
+| `eih_040_side` | 0x148ba6b | 005 010 |
+| `eih_050_front` | 0x148ba88 | 003 010 |
+| `eih_060_entrance` | 0x148baa6 | 003 010 015 |
+| `eih_070_terrace` | 0x148bac7 | 007 |
+| `eih_080_archives` | 0x148bae7 | 001 005 |
+| `eih_090_cellar` | 0x148bb08 | 010 |
+| `eih_100_lobby` | 0x148bb27 | 015 |
+| `wmp_410_roundtable` | 0x148bb45 | 010 |
+| `pro_010_catacombs` | 0x149d1df | 005 010 030 040 |
+| `pro_210_flashbacks` | 0x148bb68 | 010 020 |
+| `emb_020_tunnels` | 0x148bb8b | 005 010 |
+| `wch_300_brothelagain` | 0x148bbab | 010 |
+| `cat_010_streets` | 0x148bbd0 | 010 |
+| `cat_020_underground` | 0x148bbf0 | 010 |
+| `cat_030_crypts` | 0x148bc14 | 010 |
+| `cat_040_armory` | 0x148bc33 | 010 030 040 |
+| `tsl_520_teslaslab` | 0x148bc52 | 010 050 |
+| `wmp_530_fin` | 0x148bc74 | 010 |
+
+The list from 0x148b3e9 to 0x148bc74 looks like campaign order; it is not proven to be one, and
+chapter numbers are not in the data read here. A checkpoint is tied to a level only by its
+name prefix.
+
+How to start a level: `python run.py --level wch_020_slums --checkpoint wch_020_checkpoint_025`
+(run.py turns these into `-startlevel`/`-startcheckpoint`); `--checkpoint` is optional (the
+level's default checkpoint is used). Do not combine with `--frontend` (front end wins) or with
+the engine's `-level` (the level loaded there makes the gate false). Not yet known: whether a
+profile or save prompt still appears before control (state 2 loads a resource at 0x16da578 when
+`game+0x20` is empty), and what an unknown hash does in `sub_2b37b0`; the title screen seen with
+`wch_020` suggests a fallback to the front end, but that path has not been read.
 
 ## Rendering facts used by fixes
 

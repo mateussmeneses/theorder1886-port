@@ -288,6 +288,23 @@ def configure_windows_runtime(probe, env):
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
 
 
+GAME_ARGS_PATCH = 'Command Line - Game Arguments'
+
+
+def level_start(guest_args, patches):
+    """The retail eboot ignores its argv (docs/ENGINE_RE.md, "Level start"): with -startlevel the
+    patch that makes it read them is added to the THEORDER_PATCHES list, and -syncinterval 2, the
+    setting of the fixed option string it replaces. Other runs are unchanged."""
+    if '-startlevel' not in guest_args:
+        return guest_args, patches
+    names = [name for name in (patches or '').split(';') if name]
+    if GAME_ARGS_PATCH not in names:
+        names.append(GAME_ARGS_PATCH)
+    if '-syncinterval' not in guest_args:
+        guest_args = guest_args + ['--guest-arg', '-syncinterval', '--guest-arg', '2']
+    return guest_args, ';'.join(names)
+
+
 def main():
     args = sys.argv[1:]
     if len(args) >= 2 and args[0] == '--after':
@@ -331,10 +348,12 @@ def main():
         else:
             translated_args.append(args[i])
             i += 1
-    args = translated_args
     # As run.sh: relative paths (THEORDER_GAME_DIR, etc.) are from the port.
     os.chdir(PORT)
     env = os.environ
+    args, level_patches = level_start(translated_args, get_env(env, 'PATCHES', ''))
+    if level_patches:
+        env['THEORDER_PATCHES'] = level_patches
     data = Path(get_env(env, 'DATA_DIR', PORT))
     out = data / 'out'
     out.mkdir(parents=True, exist_ok=True)

@@ -87,17 +87,47 @@ entries (probe.c), which this concatenation handles.
 
 ## Level start (-startlevel)
 
-Static analysis only (T-020, 2026-11-12); not yet confirmed in a run. Build: CUSA00035 01.02,
+T-020, 2026-11-12. Build: CUSA00035 01.02,
 `out/eboot.elf` and `out/eboot_ghidra.exe` (sha256 `0f42dce6…3146f`). Addresses are eboot
 addresses; **file offset = address + 0x4000** for both load segments (program headers: text at
 file 0x4000 -> 0, data at file 0x15c0000 -> 0x15bc000). Verified with `llvm-objdump -d` of
 `out/eboot.elf`, REA/Ghidra pseudocode of `out/eboot_ghidra.exe` (address + 0x100000000), and the
 `R_X86_64_RELATIVE` entries of the dynlib data segment (file 0x166f940..) for vtable slots.
 
-**Conclusion: the tried names were wrong, not the gate.** `-startlevel` wants the full level
-name, `wch_020_slums` or `pro_010_catacombs`, not the checkpoint prefix `wch_020`/`pro_010`.
-The level is selected by the 64-bit hash of the name; `wch_020` hashes to no level. No patch is
-needed for the retail executable to start a level.
+**Conclusion: the retail eboot never reads its argv.** `sub_1fd010` (called by `main`) builds
+the option table from the fixed string `"-frontend -syncinterval 2"` (0x1482726, `leaq` at
+0x1fd12e, parsed by `sub_201d10` at 0x1fd13c) and hands that table to the game object
+(0x1fd16c -> 0x44c6c0 -> base constructor 0xa88990, stored at `game+0x40`). The argv string
+`main` builds (`" %s "` per entry, 0x298210..0x29832c) and stores at 0x165ae00 (0x298339) has
+no reader: Ghidra and objdump show that store as the only reference. So every option the port
+passes is ignored: `-startlevel`, and also `-cores`, `-use4K`, `-syncinterval`, `-language`,
+`-usedlc`, `-disablecloth`, which explains the "same as before" results in the Command line
+table. `-frontend` is always set, so 0x447880 always picks the front end.
+
+The patch **"Command Line - Game Arguments"** (`patches/TheOrder1886-Orbis.xml`, disabled by
+default; `run.py --level` adds it) changes two instructions; every byte was checked against
+`llvm-objdump` of `out/eboot.elf` and decoded with `llvm-mc`:
+
+| Site (file offset) | Original | Patched |
+|---|---|---|
+| 0x1fd12e (0x20112e) | `48 8d 35 f1 55 28 01` lea rsi,[0x1482726] | `48 8b 35 cb dc 45 01` mov rsi,[0x165ae00] |
+| 0x298203 (0x29c203) | `85 db 0f 8e 27 01 00 00 45 31 ff 66 90` test ebx,ebx; jle 0x298332; xor r15d,r15d; nop | `83 fb 01 0f 8e 26 01 00 00 6a 01 41 5f` cmp ebx,1; jle 0x298332; push 1; pop r15 |
+
+The second change is needed because the option checker `sub_7f4930` (called from 0xa81b30 for
+`-help`) stops at the first token that does not start with '-' and reports
+`'%s' is not a valid command line argument.` through `sub_203650`, which raises a debug
+exception (run with only the first change: `STOP: guest raised debug exception
+code=0xa0020001` after "Encountered an error:"). argv[0] is `/app0/eboot.bin`, so `main`'s loop
+now starts at argv[1]; with argc <= 1 it skips the loop as before and the string is empty, and
+with no `-frontend`/`-startlevel` 0x447880 still goes to the front end. The same checker rejects
+options it does not know and wrong parameter counts, so with this patch only registered
+options may be passed. `run.py` adds `-syncinterval 2` to keep the replaced string's setting.
+
+**Refuted earlier claim:** the first version of this section (same day, static only) said the
+tried names were simply wrong and that no patch was needed. A run with the full name
+(`--level wch_020_slums --checkpoint wch_020_checkpoint_025`) still showed the title screen
+(log `out/batch/base-01-20261112T160456050966Z.log`), because the option never reached the
+game. The full level name *is* required, as below; it is not enough.
 
 Call order (game object, vtable 0x161ae10, stored at 0x44c6d3 by its constructor 0x44c6c0; engine
 base vtable 0x164a5d0, base constructor 0xa88990 sets `+0x30` and `+0x38` to -1):
@@ -242,13 +272,32 @@ The list from 0x148b3e9 to 0x148bc74 looks like campaign order; it is not proven
 chapter numbers are not in the data read here. A checkpoint is tied to a level only by its
 name prefix.
 
-How to start a level: `python run.py --level wch_020_slums --checkpoint wch_020_checkpoint_025`
-(run.py turns these into `-startlevel`/`-startcheckpoint`); `--checkpoint` is optional (the
-level's default checkpoint is used). Do not combine with `--frontend` (front end wins) or with
-the engine's `-level` (the level loaded there makes the gate false). Not yet known: whether a
-profile or save prompt still appears before control (state 2 loads a resource at 0x16da578 when
-`game+0x20` is empty), and what an unknown hash does in `sub_2b37b0`; the title screen seen with
-`wch_020` suggests a fallback to the front end, but that path has not been read.
+How to start a level: `python run.py --level wch_080_ambush --checkpoint wch_080_checkpoint_005`.
+run.py turns these into `-startlevel`/`-startcheckpoint` and, only when `-startlevel` is present,
+adds the "Command Line - Game Arguments" patch and `-syncinterval 2` (`run.level_start`,
+`tests/test_run_level.py`). `--checkpoint` is optional (the level's default checkpoint is used).
+Do not combine with `--frontend` (front end wins), with the engine's `-level` (the level loaded
+there makes the gate false), or with options the game does not register (the option checker
+stops the game; the `--perf` options `-nocamsprings`/`-nocamadditive` were never checked).
+
+Validated 2026-11-12 (`out/theorder-probe.exe` of 02:35, profile from `user/` with savedata,
+`THEORDER_PATCHES='Command Line - Game Arguments'`, `--guest-arg -syncinterval --guest-arg 2`,
+pad `62:ly=0:5`, frame dumps at 60 s and 75 s), no title screen and no menu presses:
+
+| Level / checkpoint | Runs ok | Scene at 60-75 s | Manifest (`out/batch/manifests/`) |
+|---|---|---|---|
+| `wch_080_ambush` / `wch_080_checkpoint_005` | 3/3 | Whitechapel street, Grayson with a rifle; the view moves with the stick | `regression-20261112T162548Z.json` |
+| `may_040_atrium` / `may_040_checkpoint_010` | 3/3 | the Atrium, in cover, HUD prompt "EQUIP WEAPON" | `regression-20261112T163104Z.json` |
+| `bwy_010_tunnel` / `bwy_010_checkpoint_010` | 3/3 | the Blackwall tunnel, a companion on the tracks ahead | `regression-20261112T163621Z.json` |
+| `wch_020_slums` / `wch_020_checkpoint_025` | 2/2 | the slums, Grayson walks to a rebel ("Please Shamus!") | `regression-20261112T162100Z.json`, `…162347Z.json` |
+
+Through run.py alone (no `THEORDER_PATCHES`, no extra argument, no checkpoint):
+`--level may_040_atrium` added the patch and `-syncinterval 2` itself and reached the same
+Atrium scene (`regression-20261112T204210Z.json`, Grayson's face rendered wrong in that dump; a
+renderer matter, not this patch). Frame dumps: `D:\theorder-bench\cap-t020-{wch080,atrium,bwy010,p3,runpy}`. The run with only the
+first patch line is `regression-20261112T161623Z.json` (debug exception). Still unknown: what an
+unknown hash does in `sub_2b37b0`, and how far the starting inventory and story flags differ
+from a player's (the per-level loadout list suggests the level sets its own loadout).
 
 ## Rendering facts used by fixes
 

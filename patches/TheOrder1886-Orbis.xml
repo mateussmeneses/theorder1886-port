@@ -178,5 +178,18 @@
             <Line Type="bytes" Address="0x00b106e7" Value="eb" Pattern="c5 fa 10 0d ?? ?? ?? ?? 76 08 c5 fa 59 0d ?? ?? ?? ?? c5 fa 11 4d" At="8"/>
         </PatchList>
     </Metadata>
+    <Metadata Title="The Order 1886"
+              Name="Command Line - Game Arguments"
+              Note="Developer use (level start for automation, run.py --level). The retail game builds its option table from the fixed string &quot;-frontend -syncinterval 2&quot; (sub_1fd010: lea rsi at 0x1fd12e, then sub_201d10) and never reads the argv string main stores at 0x165ae00. This turns the lea into a load of that pointer (48 8d 35 -> 48 8b 35, rel32 to 0x165ae00), so -startlevel and the other developer options are read. The option checker (sub_7f4930) rejects a first token that is not an option and raises a debug exception, so main's loop also starts at argv[1] instead of argv[0] (/app0/eboot.bin): at 0x298203 test ebx,ebx / jle -> cmp ebx,1 / jle (same target 0x298332), and xor r15d,r15d / nop -> push 1 / pop r15. run.py adds -syncinterval 2 to keep the fixed string's setting; with no option the string is empty and the game goes to the front end."
+              Author="theorder1886-port"
+              PatchVer="1.0"
+              AppVer="01.02"
+              AppElf="eboot.bin"
+              isEnabled="false">
+        <PatchList>
+            <Line Type="bytes" Address="0x001fd12f" Value="8b35cbdc4501" Pattern="48 8d 35 f1 55 28 01 48 8d bd 18 ff ff ff e8 cf 4b 00 00" At="1"/>
+            <Line Type="bytes" Address="0x00298203" Value="83fb010f8e260100006a01415f" Pattern="85 db 0f 8e 27 01 00 00 45 31 ff 66 90 4b 8b 34 fe 31 c0" At="0"/>
+        </PatchList>
+    </Metadata>
 
 </Patch>

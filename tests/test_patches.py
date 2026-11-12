@@ -186,6 +186,25 @@ class SignatureTests(unittest.TestCase):
             self.assertEqual(sorted(found), sorted(compile_patches(ORDER, [name], '01.02', segments)), name)
 
     @unittest.skipUnless((ROOT / 'out/eboot.elf').exists(), 'needs the prepared 01.02 eboot (out/eboot.elf)')
+    def test_game_arguments_patch_points_at_mains_argument_string(self):
+        # sub_1fd010 loads the pointer main stores at 0x165ae00 (mov rsi, [rip+rel32]) instead of
+        # the fixed "-frontend -syncinterval 2", and main's loop starts at argv[1] with the same
+        # exit target 0x298332.
+        import struct
+        import patches
+        elf = (ROOT / 'out/eboot.elf').read_bytes()
+        image = bytearray(patches.eboot_image(elf))
+        self.assertEqual(bytes(image[0x1482726:0x1482740]), b'-frontend -syncinterval 2\0')
+        for offset, data in compile_patches(ORDER, ['Command Line - Game Arguments'], None,
+                                            patches.eboot_segments(elf), bytes(image), {}, reference=False):
+            image[offset:offset + len(data)] = data
+        self.assertEqual(bytes(image[0x1fd12e:0x1fd131]), bytes.fromhex('488b35'))
+        self.assertEqual(0x1fd135 + struct.unpack_from('<i', image, 0x1fd131)[0], 0x165ae00)
+        self.assertEqual(bytes(image[0x298203:0x298208]), bytes.fromhex('83fb010f8e'))  # cmp ebx,1; jle
+        self.assertEqual(0x29820c + struct.unpack_from('<i', image, 0x298208)[0], 0x298332)
+        self.assertEqual(bytes(image[0x29820c:0x298210]), bytes.fromhex('6a01415f'))  # push 1; pop r15
+
+    @unittest.skipUnless((ROOT / 'out/eboot.elf').exists(), 'needs the prepared 01.02 eboot (out/eboot.elf)')
     def test_fov_sites_hold_the_original_constant(self):
         # The in-game field of view scales these: the game's own value is 1.35 / 2.4.
         import struct

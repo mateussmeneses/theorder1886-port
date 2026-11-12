@@ -97,6 +97,7 @@ jobs:
             mingw-w64-clang-x86_64-spirv-tools
             mingw-w64-clang-x86_64-spirv-headers
             mingw-w64-clang-x86_64-spirv-cross
+            mingw-w64-clang-x86_64-mesa
 
       - name: Check checkout and toolchain
         run: |

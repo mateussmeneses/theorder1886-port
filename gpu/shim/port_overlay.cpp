@@ -15,6 +15,7 @@
 
 #include <SDL3/SDL.h>
 #include "port_settings.h"
+#include "port_ui_language.h"
 #include "port_graphics.h"
 #include "port_perf_stats.h"
 #include "../theordergpu.h"
@@ -170,6 +171,15 @@ void Store(std::atomic<T>& target, T value, bool changed) {
     }
 }
 
+using PortUi::Tr;
+
+// The language in use: the setting, or Windows' display language when it is automatic.
+int SystemLanguage();
+void ApplyLanguage() {
+    const int setting = PortSettings::Get().ui_language;
+    PortUi::SetLanguage(setting >= 0 ? setting : SystemLanguage());
+}
+
 void Checkbox(const char* label, std::atomic<bool>& value) {
     bool v = value;
     const bool changed = ImGui::Checkbox(label, &v);
@@ -183,7 +193,12 @@ void Choice(const char* label, std::atomic<int>& target, const char* const* labe
     for (int i = 0; i < count; ++i) {
         if ((values ? values[i] : i) == target.load()) current = i;
     }
-    if (ImGui::Combo(label, &current, labels, count)) {
+    // The labels in the menu's language (the values stay the same).
+    std::vector<const char*> shown(labels, labels + count);
+    for (const char*& text : shown) {
+        text = Tr(text);
+    }
+    if (ImGui::Combo(label, &current, shown.data(), count)) {
         Store(target, values ? values[current] : current, true);
     }
 }
@@ -242,7 +257,7 @@ const char* footer_help = nullptr;
 
 void Help(const char* text) {
     if (text && (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) || ImGui::IsItemFocused())) {
-        footer_help = text;
+        footer_help = Tr(text);
     }
 }
 
@@ -260,7 +275,7 @@ void Row(const char* label) {
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
+    ImGui::TextUnformatted(Tr(label));
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::PushID(label);
@@ -283,7 +298,7 @@ void ChoiceRow(const char* label, std::atomic<int>& target, const char* const* l
 
 void InfoRow(const char* label, const char* text) {
     Row(label);
-    ImGui::TextDisabled("%s", text);
+    ImGui::TextDisabled("%s", Tr(text));
     ImGui::PopID();
 }
 
@@ -328,7 +343,7 @@ std::string OverlayText() {
 void ImageTab() {
     namespace G = PortGraphics;
     auto& s = PortSettings::Get();
-    ImGui::SeparatorText("Display");
+    ImGui::SeparatorText(Tr("Display"));
     if (BeginRows("##display")) {
         ChoiceRow("Display mode", s.display_mode, G::DisplayModeNames.data(), nullptr, G::DisplayModeCount,
                   "Windowed, borderless window or exclusive fullscreen.");
@@ -338,7 +353,7 @@ void ImageTab() {
         PortSettings::ApplyFov();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Mouse Look");
+    ImGui::SeparatorText(Tr("Mouse Look"));
     if (BeginRows("##mouse")) {
         CheckRow("Mouse look (F7)", s.mouse_look,
                  "The mouse turns the camera; left button fires (R2), right button aims (L2), "
@@ -352,7 +367,7 @@ void ImageTab() {
         ImGui::EndDisabled();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Resolution & Upscaling");
+    ImGui::SeparatorText(Tr("Resolution & Upscaling"));
     if (BeginRows("##upscaling")) {
         static const char* const res_labels[] = {
             "1280 x 720 (720p)", "1600 x 900 (900p)", "1920 x 1080 (1080p)", "2560 x 1440 (1440p)",
@@ -392,14 +407,14 @@ void ImageTab() {
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;
     const bool downscaling = iw > ww || ih > wh;
     const bool rcas_blocked = s.rcas && !s.rcas_applied;
-    ImGui::SeparatorText("Applied on restart");
+    ImGui::SeparatorText(Tr("Applied on restart"));
     if (BeginRows("##image_restart")) {
         ChoiceRow("Aspect ratio", s.aspect, G::AspectNames.data(), nullptr, int(G::AspectNames.size()),
                   "The shape of the game's picture. Pick your screen's to fill it without black bars: "
                   "the view keeps the original width and shows more above and below.");
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Sharpening");
+    ImGui::SeparatorText(Tr("Sharpening"));
     if (BeginRows("##scaling")) {
         ImGui::BeginDisabled(rcas_blocked);
         CheckRow("Sharpening (RCAS)", s.rcas,
@@ -412,7 +427,7 @@ void ImageTab() {
         ImGui::EndDisabled();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Information");
+    ImGui::SeparatorText(Tr("Information"));
     if (BeginRows("##image_info")) {
         char text[96];
         const int out_idx = std::clamp(s.output_res.load(), 0, PortSettings::OutputCount - 1);
@@ -432,7 +447,7 @@ void ImageTab() {
 void PerformanceTab() {
     namespace G = PortGraphics;
     auto& s = PortSettings::Get();
-    ImGui::SeparatorText("Live");
+    ImGui::SeparatorText(Tr("Live"));
     if (BeginRows("##live")) {
         static const char* const fps_labels[] = {"30", "60", "120", "240", "Unlimited"};
         ChoiceRow("Frame rate limit", s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
@@ -440,13 +455,13 @@ void PerformanceTab() {
         // The Order presents every other vblank of its engine rate: 30 FPS at "60", 60 with the patch.
         const int effective = G::EffectiveFps(s.fps_limit, s.applied_engine_fps / 2);
         if (s.fps_limit == 0 || effective < s.fps_limit) {
-            char text[48];
-            std::snprintf(text, sizeof(text), "%d FPS (engine frame rate)", effective);
+            char text[96];
+            std::snprintf(text, sizeof(text), Tr("%d FPS (engine frame rate)"), effective);
             InfoRow("Effective limit", text);
         }
         if (s.applied_engine_fps < s.startup_engine_fps) {
-            char text[96];
-            std::snprintf(text, sizeof(text), "%d FPS: the %d FPS patch is not available for this game build",
+            char text[192];
+            std::snprintf(text, sizeof(text), Tr("%d FPS: the %d FPS patch is not available for this game build"),
                           s.applied_engine_fps / 2, s.startup_engine_fps / 2);
             InfoRow("Engine frame rate", text);
         }
@@ -457,7 +472,7 @@ void PerformanceTab() {
                  "Fewer stutters in new areas; an object or effect may appear a moment later.");
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Applied on restart");
+    ImGui::SeparatorText(Tr("Applied on restart"));
     if (BeginRows("##restart")) {
         // Engine 60 is The Order's own 30 FPS; 120 asks for its 60 FPS patch, 240 for 120 FPS.
         static const char* const engine_labels[] = {"30 (original)", "60 (experimental)", "120 (experimental)"};
@@ -481,7 +496,7 @@ void OverlayTab() {
         ImGui::EndTable();
     }
     ImGui::BeginDisabled(!s.show_fps);
-    ImGui::SeparatorText("What to show");
+    ImGui::SeparatorText(Tr("What to show"));
     if (ImGui::BeginTable("##overlay_items", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableNextColumn();
         static const char* const names[] = {"FPS", "Frametime", "Upscaler", "GPU (name and use)", "CPU (game)",
@@ -489,22 +504,23 @@ void OverlayTab() {
         for (unsigned item = 0; item < 7; ++item) {
             const unsigned bit = 1u << item;
             bool on = (s.overlay_items & bit) != 0;
-            if (ImGui::Checkbox(names[item], &on)) {
+            const std::string label = std::string(Tr(names[item])) + "###" + names[item];
+            if (ImGui::Checkbox(label.c_str(), &on)) {
                 s.overlay_items = on ? (s.overlay_items | bit) : (s.overlay_items & ~bit);
                 dirty = true;
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextDisabled("Preview");
+        ImGui::TextDisabled("%s", Tr("Preview"));
         ImGui::BeginChild("##preview", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
         const std::string text = OverlayText();
-        ImGui::TextUnformatted(text.empty() ? "(nothing selected)" : text.c_str());
+        ImGui::TextUnformatted(text.empty() ? Tr("(nothing selected)") : text.c_str());
         ImGui::SetWindowFontScale(1.0f);
         ImGui::EndChild();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Appearance");
+    ImGui::SeparatorText(Tr("Appearance"));
     if (BeginRows("##appearance")) {
         SliderRow("Font size", s.overlay_scale, 50, 300, "%d%%", "Size of the overlay text.");
         static const char* const corners[] = {"Top left", "Top right", "Bottom left", "Bottom right"};
@@ -515,7 +531,7 @@ void OverlayTab() {
         ImGui::EndTable();
     }
     ImGui::EndDisabled();
-    ImGui::SeparatorText("About");
+    ImGui::SeparatorText(Tr("About"));
     if (BeginRows("##about")) {
         const auto& elf = Common::ElfInfo::Instance();
         char text[160];
@@ -524,9 +540,9 @@ void OverlayTab() {
         InfoRow("Game", text);
         const u32 total = background_total;
         if (total) {
-            std::snprintf(text, sizeof(text), "loading %u%%", u32(u64(background_done) * 100 / total));
+            std::snprintf(text, sizeof(text), Tr("loading %u%%"), u32(u64(background_done) * 100 / total));
         } else {
-            std::snprintf(text, sizeof(text), "ready");
+            std::snprintf(text, sizeof(text), "%s", Tr("ready"));
         }
         InfoRow("Shader cache", text);
         ImGui::EndTable();
@@ -535,12 +551,12 @@ void OverlayTab() {
 
 void GameTab() {
     auto& s = PortSettings::Get();
-    ImGui::SeparatorText("Game");
+    ImGui::SeparatorText(Tr("Game"));
     if (BeginRows("##game")) {
         CheckRow("Pause the game", s.pause_game, "The game stops while this menu is open.");
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Audio");
+    ImGui::SeparatorText(Tr("Audio"));
     if (BeginRows("##audio")) {
         SliderRow("Master volume", s.master_volume, PortSettings::MasterVolumeMin, PortSettings::MasterVolumeMax,
                   "%d%%", "100% is the game's own mix; more is boosted behind a soft limiter.");
@@ -551,24 +567,47 @@ void GameTab() {
                   "Layout of the game's 7.1 sound. Automatic follows the playback device.");
         ImGui::EndTable();
     }
-    ImGui::SeparatorText("Session");
+    ImGui::SeparatorText(Tr("Language"));
+    if (BeginRows("##language")) {
+        // The names stay in their own language (they are not table keys).
+        static std::vector<const char*> language_labels;
+        static std::vector<int> language_values;
+        if (language_labels.empty()) {
+            language_labels.push_back("Automatic (Windows)");
+            language_values.push_back(-1);
+            for (int i = 0; i < PortUi::LanguageCount; ++i) {
+                language_labels.push_back(PortUi::Languages[i].name);
+                language_values.push_back(i);
+            }
+        }
+        const int before = s.ui_language;
+        ChoiceRow("Menu language", s.ui_language, language_labels.data(), language_values.data(),
+                  int(language_labels.size()), "The language of this menu. Automatic follows Windows.");
+        if (s.ui_language != before) {
+            ApplyLanguage();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::SeparatorText(Tr("Session"));
     if (BeginRows("##session")) {
         // In the value column like every other row, so the d-pad and arrow keys reach it from the
         // rows above (a button in the label column was skipped on the way to Close).
         Row("Leave the game");
-        if (ImGui::Button("Exit to Desktop", ImVec2(-FLT_MIN, 0.0f))) {
-            ImGui::OpenPopup("Exit to Desktop?");
+        const std::string exit_label = std::string(Tr("Exit to Desktop")) + "###exit_to_desktop";
+        if (ImGui::Button(exit_label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
+            ImGui::OpenPopup("###exit_question");
         }
         Help("Closes the game, as closing the window does. Progress since the last save is lost.");
-        if (ImGui::BeginPopupModal("Exit to Desktop?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextUnformatted("Progress since the last save is lost.");
-            if (ImGui::Button("Exit")) {
+        const std::string question = std::string(Tr("Exit to Desktop?")) + "###exit_question";
+        if (ImGui::BeginPopupModal(question.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            ImGui::TextUnformatted(Tr("Progress since the last save is lost."));
+            if (ImGui::Button(Tr("Exit"))) {
                 // Leaves at the start of the next Render, outside imgui_mutex: the window thread
                 // keeps handling events while the shader cache drains.
                 exit_requested = true;
             }
             ImGui::SameLine();
-            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+            if (ImGui::Button(Tr("Cancel")) || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
                 ImGui::CloseCurrentPopup();
             }
@@ -581,7 +620,7 @@ void GameTab() {
 
 void ControlsTab() {
     auto& s = PortSettings::Get();
-    ImGui::SeparatorText("Active Input");
+    ImGui::SeparatorText(Tr("Active Input"));
     if (BeginRows("##active_input")) {
         const char* current_type = "PlayStation Controller";
         if (last_active_input == ActiveInput::Keyboard) {
@@ -593,7 +632,7 @@ void ControlsTab() {
         ImGui::EndTable();
     }
 
-    ImGui::SeparatorText("Mouse Look");
+    ImGui::SeparatorText(Tr("Mouse Look"));
     if (BeginRows("##mouse_settings")) {
         CheckRow("Mouse look (F7)", s.mouse_look, "Use mouse movement to aim and look around.");
         SliderRow("Horizontal sensitivity (X)", s.mouse_sensitivity, 10, 400, "%d%%", "Horizontal look sensitivity percentage.");
@@ -602,7 +641,7 @@ void ControlsTab() {
         ImGui::EndTable();
     }
 
-    ImGui::SeparatorText("Default Controls Reference");
+    ImGui::SeparatorText(Tr("Default Controls Reference"));
     if (BeginRows("##controls_ref")) {
         InfoRow("Shoot / Fire", PadText("R2", "RT", "ZR", "Left Mouse Button"));
         InfoRow("Aim Weapon", PadText("L2", "LT", "ZL", "Right Mouse Button"));
@@ -668,7 +707,8 @@ void Menu() {
         static const char* const tabs[TabCount] = {"Image", "Performance", "Overlay", "Controls", "Game"};
         for (int tab = 0; tab < TabCount; ++tab) {
             const ImGuiTabItemFlags flags = requested_tab == tab ? ImGuiTabItemFlags_SetSelected : 0;
-            if (!ImGui::BeginTabItem(tabs[tab], nullptr, flags)) {
+            const std::string tab_label = std::string(Tr(tabs[tab])) + "###" + tabs[tab];
+            if (!ImGui::BeginTabItem(tab_label.c_str(), nullptr, flags)) {
                 continue;
             }
             if (s.menu_tab != tab && requested_tab < 0) {
@@ -707,14 +747,20 @@ void Menu() {
 
     ImGui::Separator();
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", footer_help ? footer_help : PadText("L1 / R1: switch tabs. Settings are saved in theorder.ini.", "LB / RB: switch tabs. Settings are saved in theorder.ini.", "L / R: switch tabs. Settings are saved in theorder.ini.", "Ctrl+Tab or PageUp/Down: switch tabs. Settings are saved in theorder.ini."));
+    ImGui::TextDisabled("%s", footer_help ? footer_help : Tr(PadText("L1 / R1: switch tabs. Settings are saved in theorder.ini.", "LB / RB: switch tabs. Settings are saved in theorder.ini.", "L / R: switch tabs. Settings are saved in theorder.ini.", "Ctrl+Tab or PageUp/Down: switch tabs. Settings are saved in theorder.ini.")));
     ImGui::PopTextWrapPos();
     if (const int changes = RestartChanges()) {
-        ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%d change%s need%s a restart (unsaved progress is lost).",
-                           changes, changes == 1 ? "" : "s", changes == 1 ? "s" : "");
+        // One text per number: the English plural trick does not translate.
+        if (changes == 1) {
+            ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s",
+                               Tr("1 change needs a restart (unsaved progress is lost)."));
+        } else {
+            ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f),
+                               Tr("%d changes need a restart (unsaved progress is lost)."), changes);
+        }
         ImGui::SameLine();
         ImGui::BeginDisabled(!std::getenv("THEORDER_RESTART_COMMAND"));
-        if (ImGui::Button("Apply and restart")) {
+        if (ImGui::Button(Tr("Apply and restart"))) {
             // The new launch confirms the options once the game shows; run.py restores the
             // previous ones if it never does (restart_unconfirmed).
             s.restart_unconfirmed = true;
@@ -725,9 +771,9 @@ void Menu() {
     } else {
         ImGui::NewLine();
     }
-    const float close_width = ImGui::CalcTextSize("Close").x + ImGui::GetStyle().FramePadding.x * 2;
+    const float close_width = ImGui::CalcTextSize(Tr("Close")).x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - close_width);
-    if (ImGui::Button("Close")) {
+    if (ImGui::Button(Tr("Close"))) {
         keep_open = false;
     }
     ImGui::End();
@@ -755,8 +801,8 @@ void TextEntryBox() {
     ImGui::Text("%s_", text_entry_text.c_str());
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
-    ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
-    ImGui::TextDisabled("%s", PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel", "Controller: B = OK, A = cancel"));
+    ImGui::TextDisabled("%s", Tr("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel"));
+    ImGui::TextDisabled("%s", Tr(PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel", "Controller: B = OK, A = cancel")));
     ImGui::End();
 }
 
@@ -809,7 +855,7 @@ void ChoiceBox() {
         }
     }
     ImGui::Separator();
-    ImGui::TextDisabled("%s", PadText("Up/Down or D-pad: choose   Enter or Cross (A): OK   Esc or Circle (B): cancel", "Up/Down or D-pad: choose   Enter or A: OK   Esc or B: cancel", "Up/Down or D-pad: choose   Enter or B: OK   Esc or A: cancel"));
+    ImGui::TextDisabled("%s", Tr(PadText("Up/Down or D-pad: choose   Enter or Cross (A): OK   Esc or Circle (B): cancel", "Up/Down or D-pad: choose   Enter or A: OK   Esc or B: cancel", "Up/Down or D-pad: choose   Enter or B: OK   Esc or A: cancel")));
     ImGui::End();
 }
 
@@ -825,7 +871,7 @@ void LoadingScreen() {
                      ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
     const u32 done = loading_done, total = loading_total;
     ImGui::SetWindowFontScale(1.6f);
-    ImGui::TextUnformatted(total ? "Loading shader cache..." : "Preparing graphics...");
+    ImGui::TextUnformatted(Tr(total ? "Loading shader cache..." : "Preparing graphics..."));
     ImGui::SetWindowFontScale(1.0f);
     if (total) {
         char count[64];
@@ -833,7 +879,7 @@ void LoadingScreen() {
                       u32(u64(done) * 100 / total));
         ImGui::ProgressBar(float(done) / float(total), ImVec2(-1.0f, 0.0f), count);
     }
-    ImGui::TextDisabled("The first start after an update takes longer.");
+    ImGui::TextDisabled("%s", Tr("The first start after an update takes longer."));
     ImGui::End();
 }
 
@@ -872,8 +918,29 @@ void BackgroundLoading() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextDisabled("Loading shader cache %u%%", u32(u64(done) * 100 / total));
+    ImGui::TextDisabled(Tr("Loading shader cache %u%%"), u32(u64(done) * 100 / total));
     ImGui::End();
+}
+
+#ifdef _WIN32
+extern "C" __declspec(dllimport) unsigned short __stdcall GetUserDefaultUILanguage(void);
+#endif
+
+// Windows' display language (its primary language id), or LANG elsewhere, as a menu language.
+int SystemLanguage() {
+#ifdef _WIN32
+    switch (GetUserDefaultUILanguage() & 0x3ff) {
+    case 0x16: return PortUi::FindLanguage("pt");
+    case 0x0a: return PortUi::FindLanguage("es");
+    case 0x0c: return PortUi::FindLanguage("fr");
+    case 0x07: return PortUi::FindLanguage("de");
+    case 0x10: return PortUi::FindLanguage("it");
+    default: return 0;
+    }
+#else
+    const char* lang = std::getenv("LANG");
+    return lang ? PortUi::FindLanguage(lang) : 0;
+#endif
 }
 
 } // namespace
@@ -883,6 +950,8 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     if (initialized) {
         return;
     }
+    ApplyLanguage();
+    std::printf("Overlay: menu language %s\n", PortUi::Languages[PortUi::language.load()].name);
     if (const char* log = std::getenv("THEORDER_PERF_LOG"); log && std::strcmp(log, "1") == 0) {
         PortPerfStats::Start(instance);
     }

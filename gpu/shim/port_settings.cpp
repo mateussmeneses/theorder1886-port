@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "port_settings.h"
+#include "port_ui_language.h"
 #include "port_graphics.h"
 
 #include <cctype>
@@ -98,6 +99,10 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.async_shaders = i != 0;
     } else if (key == "pause_game") {
         v.pause_game = i != 0;
+    } else if (key == "ui_language") {
+        // "en" is English; any other unknown code (or "auto") follows Windows.
+        const int found = PortUi::FindLanguage(value);
+        v.ui_language = found > 0 || (value.size() >= 2 && (value[0] | 0x20) == 'e' && (value[1] | 0x20) == 'n') ? found : -1;
     } else if (key == "fsr1") {
         // FSR 1 left the launcher and the in-game menu: a value saved by an older version has no
         // control left to turn it off, so it stays off.
@@ -192,6 +197,7 @@ void Load() {
         {"THEORDER_STALE_READBACK", "stale_readback"},     {"THEORDER_FSR1", "fsr1"},
         {"THEORDER_RCAS", "rcas"},                        {"THEORDER_FRAMES_AHEAD", "frames_queued"},
         {"THEORDER_ANISOTROPY", "anisotropy"},
+        {"THEORDER_UI_LANGUAGE", "ui_language"},
         {"THEORDER_AUDIO_VOLUME", "master_volume"},       {"THEORDER_AUDIO_CHANNELS", "audio_channels"},
     };
     for (const auto& [env, key] : env_keys) {
@@ -311,6 +317,13 @@ void Save() {
     std::fprintf(file, "fov=%d\nmouse_look=%d\nmouse_sensitivity=%d\nmouse_sensitivity_y=%d\nmouse_invert_y=%d\nanisotropy=%d\n",
                  v.fov.load(), int(v.mouse_look.load()), v.mouse_sensitivity.load(),
                  v.mouse_sensitivity_y.load(), int(v.mouse_invert_y.load()), v.anisotropy.load());
+    {
+        const int language = v.ui_language.load();
+        std::fprintf(file, "ui_language=%s\n",
+                     language >= 0 && language < PortUi::LanguageCount
+                         ? std::string(PortUi::Languages[language].code).c_str()
+                         : "auto");
+    }
     std::fprintf(file, "pause_game=%d\n", int(v.pause_game.load()));
     std::fprintf(file, "master_volume=%d\naudio_channels=%s\n", v.master_volume.load(),
                  AudioChannelKeys[std::clamp(v.audio_channels.load(), 0, AudioChannelsCount - 1)].data());

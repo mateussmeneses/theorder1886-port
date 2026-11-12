@@ -73,6 +73,9 @@ struct Values {
     std::atomic<bool> async_shaders{true};
     /// Whether the game stops while the in-game menu is open (PortOverlay::GamePaused).
     std::atomic<bool> pause_game{true};
+    /// The menu's language: an index into PortUi::Languages (0 English), or -1 to follow
+    /// Windows. theorder.ini ui_language: auto or a code (pt, es, fr, de, it, en).
+    std::atomic<int> ui_language{-1};
     std::atomic<bool> fsr1{false};
     std::atomic<bool> rcas{true};
     std::atomic<int> rcas_strength{75};

@@ -308,10 +308,10 @@ int main() {
         MenuFrame();
         MenuFrame();
         // From Close (the first focus): up to the tab bar, then down through Pause the game,
-        // Master volume and Speakers to Exit to Desktop. The body is NavFlattened: without it the
-        // arrows went from the tab bar straight to Close.
+        // Master volume, Speakers and Menu language to Exit to Desktop. The body is NavFlattened:
+        // without it the arrows went from the tab bar straight to Close.
         press(SDLK_UP);
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 5; ++i) {
             press(SDLK_DOWN);
         }
         Check(ImGui::GetTopMostPopupModal() == nullptr);

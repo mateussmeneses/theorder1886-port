@@ -460,6 +460,10 @@ target_link_libraries(blend-rewrite-test PRIVATE Vulkan::Headers fmt::fmt Boost:
 if(NOT WIN32)
     set_source_files_properties(../tests/test_gpu_runtime_stubs.cpp PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
 endif()
+add_executable(ui-language-test EXCLUDE_FROM_ALL ../tests/test_ui_language.cpp)
+target_compile_options(ui-language-test PRIVATE -UNDEBUG)
+target_include_directories(ui-language-test PRIVATE shim)
+
 add_executable(guest-memory-test EXCLUDE_FROM_ALL ../tests/test_guest_memory.cpp)
 target_compile_options(guest-memory-test PRIVATE -UNDEBUG)
 target_include_directories(guest-memory-test PRIVATE shim)

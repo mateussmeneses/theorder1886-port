@@ -97,6 +97,7 @@ jobs:
             mingw-w64-clang-x86_64-spirv-tools
             mingw-w64-clang-x86_64-spirv-headers
             mingw-w64-clang-x86_64-spirv-cross
+            mingw-w64-clang-x86_64-mesa
 
       - name: Check checkout and toolchain
         run: |
@@ -165,15 +166,30 @@ jobs:
             exit 1
           fi
 
-      - name: Run all CPU/IR tests and GPU tests only when a Vulkan ICD exists
+      - name: Run all tests; GPU device tests on Mesa lavapipe (software Vulkan)
         env:
-          # GitHub-hosted Windows runners have no compatible Vulkan ICD/GPU.
-          # Preflight exits 77 ONLY for proven device absence; all other
-          # errors and all non-GPU tests remain failures.
+          # No hardware GPU on hosted runners. The MSYS2 mesa package ships lavapipe
+          # (vulkan_lvp.dll); point the loader at it for this step only. `auto` stays
+          # as a safety net: if the ICD fails to load the device tests are reported as
+          # SKIPPED by name, but with lavapipe present they are required and must pass.
           THEORDER_VULKAN_TESTS: auto
+          THEORDER_VULKAN_SOFTWARE: "1"
         run: |
           set -euo pipefail
-          bash tools/run_tests.sh
+          icd="$(cygpath -w "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json")"
+          test -f "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json"
+          cat "$MINGW_PREFIX/share/vulkan/icd.d/lvp_icd.x86_64.json"
+          export VK_DRIVER_FILES="$icd" VK_ICD_FILENAMES="$icd"
+          echo "VK_DRIVER_FILES=$VK_DRIVER_FILES"
+          # The hosted runner is an elevated (high-integrity) session and the Windows loader
+          # ignores VK_DRIVER_FILES there, so also register the ICD in the ephemeral runner
+          # registry (removed again in the last line of this step).
+          MSYS2_ARG_CONV_EXCL='*' reg add 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$icd" /t REG_DWORD /d 0 /f /reg:64
+          start=$SECONDS
+          rc=0; bash tools/run_tests.sh || rc=$?
+          echo "run_tests.sh wall time: $((SECONDS - start))s (exit $rc)"
+          MSYS2_ARG_CONV_EXCL='*' reg delete 'HKLM\SOFTWARE\Khronos\Vulkan\Drivers' /v "$icd" /f /reg:64 || true
+          exit $rc
 
       - name: Save non-player text diagnostics if build/tests fail
         if: failure()

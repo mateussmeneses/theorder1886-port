@@ -39,11 +39,15 @@ inline constexpr Language Languages[] = {
 inline constexpr int LanguageCount = int(sizeof(Languages) / sizeof(Languages[0]));
 inline std::atomic<int> language{0}; // index into Languages
 
-/// The index of a language code ("pt", "pt-BR", "de_DE"...); 0 (English) for any other.
+/// The index of a language code ("pt", "pt-BR", "DE_de"...; any case); 0 (English) for any other.
 inline int FindLanguage(std::string_view code) {
-    const std::string_view two = code.substr(0, 2);
+    char two[2] = {};
+    for (std::size_t i = 0; i < 2 && i < code.size(); ++i) {
+        const char c = code[i];
+        two[i] = c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+    }
     for (int i = 1; i < LanguageCount; ++i) {
-        if (Languages[i].code == two) return i;
+        if (Languages[i].code == std::string_view(two, 2)) return i;
     }
     return 0;
 }
@@ -56,8 +60,9 @@ inline int SetLanguage(int index) {
 }
 
 inline const char* Lookup(const Language& table, const char* text) {
+    const std::string_view key(text); // measured once, not once per entry
     for (std::size_t i = 0; i < table.count; ++i) {
-        if (table.texts[i].first == text) return table.texts[i].second;
+        if (table.texts[i].first == key) return table.texts[i].second;
     }
     return text;
 }

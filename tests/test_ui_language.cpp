@@ -13,15 +13,19 @@
 #include "ui_language/port_ui_keys.h"
 
 // The printf conversions of a text, in order ("%d", "%u", "%%", "%s"...). Help texts such as
-// "100% shows" are not formats: a '%' before a space or a letter-less end is plain text.
+// "100% shows" are not formats: a '%' before a space or at the end is plain text; any other
+// '%' counts, so a translation cannot slip in a %c, %i, %n or %p its English text lacks.
 static std::vector<std::string> Conversions(std::string_view text) {
     std::vector<std::string> out;
     for (std::size_t i = 0; i < text.size(); ++i) {
         if (text[i] != '%') continue;
+        if (i + 1 >= text.size() || text[i + 1] == ' ') continue;
         std::size_t j = i + 1;
-        while (j < text.size() && std::strchr("0123456789.l", text[j])) ++j;
-        if (j < text.size() && !std::strchr("%dusfx", text[j])) continue;
-        if (j < text.size()) out.emplace_back(text.substr(i, j - i + 1));
+        while (j < text.size() && std::strchr("-+#0123456789.lhzjt", text[j])) ++j;
+        // A conversion ends in a letter (or is %%); "100 %," in French is punctuation.
+        const char end = j < text.size() ? text[j] : '\0';
+        if (end != '%' && !((end >= 'a' && end <= 'z') || (end >= 'A' && end <= 'Z'))) continue;
+        out.emplace_back(text.substr(i, j - i + 1));
         i = j;
     }
     return out;
@@ -50,6 +54,10 @@ int main() {
         }
     }
     assert(PortUi::FindLanguage("pt-BR") == 1 && PortUi::FindLanguage("de_DE") == 4);
+    assert(PortUi::FindLanguage("PT-br") == 1 && PortUi::FindLanguage("IT") == 5 && PortUi::FindLanguage("p") == 0);
+    assert(Conversions("100% shows") == std::vector<std::string>{});
+    assert(Conversions("%d FPS: %u %%") == (std::vector<std::string>{"%d", "%u", "%%"}));
+    assert(Conversions("50%c") == std::vector<std::string>{"%c"}); // caught, not skipped
     assert(PortUi::FindLanguage("en") == 0 && PortUi::FindLanguage("ja") == 0 && PortUi::FindLanguage("") == 0);
     assert(PortUi::SetLanguage(1) == 1);
     assert(std::string_view(PortUi::Tr("Close")) == "Fechar");

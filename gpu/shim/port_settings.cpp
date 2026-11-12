@@ -102,7 +102,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "ui_language") {
         // "en" is English; any other unknown code (or "auto") follows Windows.
         const int found = PortUi::FindLanguage(value);
-        v.ui_language = found > 0 || value.starts_with("en") ? found : -1;
+        v.ui_language = found > 0 || (value.size() >= 2 && (value[0] | 0x20) == 'e' && (value[1] | 0x20) == 'n') ? found : -1;
     } else if (key == "fsr1") {
         // FSR 1 left the launcher and the in-game menu: a value saved by an older version has no
         // control left to turn it off, so it stays off.

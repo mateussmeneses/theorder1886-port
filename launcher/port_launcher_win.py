@@ -2700,6 +2700,8 @@ def play_without_window(settings):
         process = subprocess.Popen(run_command(), cwd=PORT_DIR, env=game_environment(settings),
                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+        if WINDOWS and FROZEN:
+            port_update.commit_quietly(PORT_DIR)  # the game started: a pending update is good
         for raw in iter(process.stdout.readline, b''):
             text = raw.decode('utf-8', errors='replace')
             log.write(text)
@@ -2753,6 +2755,10 @@ def install_update(target, wait_pid, old_version='previous'):
                         'Не удалось установить обновление ({}). Скачайте его со страницы релизов.').format(detail),
             'restored': _('The new version closed before it finished starting. The previous version was restored.',
                           'Новая версия закрылась, не успев запуститься. Восстановлена предыдущая версия.'),
+            'launch_failed': _('The new version could not be started (an antivirus may have blocked it). The '
+                               'previous version was restored.', 'Не удалось запустить новую версию (возможно, '
+                                                                 'её заблокировал антивирус). Восстановлена '
+                                                                 'предыдущая версия.'),
             'restored_slow': _('The new version did not finish starting within 5 minutes. The previous version '
                                'was restored.', 'Новая версия не запустилась за 5 минут. Восстановлена '
                                                 'предыдущая версия.'),
@@ -2803,7 +2809,7 @@ def main():
     pick_fonts(font.families(root))
     Launcher(root, tk, ttk, filedialog, messagebox)
     if WINDOWS and FROZEN:
-        port_update.commit(PORT_DIR)  # the window opened: a pending update is good, drop its backup
+        port_update.commit_quietly(PORT_DIR)  # the window opened: a pending update is good, drop its backup
     root.mainloop()
 
 

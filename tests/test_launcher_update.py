@@ -368,6 +368,161 @@ class Apply(Base):
         self.assertEqual(tree(self.target)['run.py'], b'new run')
 
 
+class SecondPass(Base):
+    def test_f1_apply_after_failed_rollback_refuses_and_keeps_the_backup(self):
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        with mock.patch.object(pu, 'rollback', side_effect=PermissionError('disk full')):
+            with self.assertRaises(pu.RestoreFailed):
+                pu.apply(self.target, self.new, '0.9.0', USER)
+        self.assertEqual((self.target / 'backup-0.9.0' / 'run.py').read_bytes(), b'old run')
+        self.assertIsNotNone(pu.pending(self.target))
+
+    def test_f1_new_apply_over_a_pending_update_rolls_it_back_first(self):
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        self.assertEqual((self.target / 'backup-0.9.0' / 'run.py').read_bytes(), b'old run')  # not a new/old mix
+        self.assertEqual(tree(self.target)['run.py'], b'new run')
+
+    def test_f1_no_retry_after_a_failed_rollback(self):
+        calls = []
+
+        def apply(*args, **kwargs):
+            calls.append(1)
+            raise pu.RestoreFailed('could not restore')
+        notes = []
+        with mock.patch.object(pu, 'apply', apply):
+            code = pu.install_and_watch(self.target, self.new, '0.9.0', USER, lambda: None,
+                                        lambda kind, detail='': notes.append(kind), retry_sleep=lambda s: None)
+        self.assertEqual((code, len(calls), notes), (1, 1, ['restore_failed']))
+
+    def test_f2a_rollback_puts_the_launcher_back_last(self):
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        with mock.patch.object(pu, '_put', wraps=pu._put) as put:
+            pu.rollback(self.target)
+        names = [Path(c.args[3]).name for c in put.call_args_list]
+        self.assertEqual(names[-1], 'The Order 1886.exe')
+        self.assertEqual(names[-2], pu.MANIFEST)
+
+    def test_f2b_changed_python_runtime_refuses_the_in_place_update(self):
+        write(self.target, {'_internal/python313.dll': 'old py'})
+        write(self.new, {'_internal/python314.dll': 'new py'})
+        before = tree(self.target)
+        with self.assertRaises(pu.RuntimeChanged):
+            pu.apply(self.target, self.new, '0.9.0', USER)
+        self.assertEqual(tree(self.target), before)
+        notes, calls = [], []
+        code = pu.install_and_watch(self.target, self.new, '0.9.0', USER, lambda: None,
+                                    lambda kind, detail='': notes.append(kind), retry_sleep=calls.append)
+        self.assertEqual((code, notes, calls), (1, ['failed'], []))  # no retries
+
+    def test_f3_damaged_journal_does_not_crash_the_start_path(self):
+        (self.target / pu.PENDING).write_text('{broken')
+        self.assertFalse(pu.commit_quietly(self.target))
+
+    def test_f3_commit_retries_a_permission_error(self):
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        real, state = os.replace, {'n': 0}
+
+        def replace(src, dst):
+            state['n'] += 1
+            if state['n'] <= 2:
+                raise PermissionError('watcher reading the journal')
+            return real(src, dst)
+        with mock.patch('os.replace', replace):
+            pu.commit(self.target, sleep=lambda s: None)
+        self.assertIsNone(pu.pending(self.target))
+
+    @unittest.skipUnless(sys.platform == 'win32', 'the launcher module is imported on Windows only')
+    def test_f4_play_without_window_commits_once_the_game_started(self):
+        import port_launcher_win as launcher
+        process = mock.Mock()
+        process.stdout.readline.return_value = b''
+        process.wait.return_value = 0
+        with mock.patch.object(launcher, 'attach_stdio'), mock.patch.object(launcher, 'open_run_log'), \
+                mock.patch.object(launcher, 'run_command', return_value=['x']), \
+                mock.patch.object(launcher, 'game_environment', return_value={}), \
+                mock.patch.object(launcher.subprocess, 'Popen', return_value=process), \
+                mock.patch.object(launcher, 'FROZEN', True), mock.patch.object(launcher, 'WINDOWS', True), \
+                mock.patch.object(pu, 'commit_quietly') as commit:
+            launcher.play_without_window({})
+        commit.assert_called_once_with(launcher.PORT_DIR)
+
+    def test_f5_apply_refreshes_the_lock_for_every_file(self):
+        with mock.patch.object(pu, 'touch_lock') as touch:
+            pu.apply(self.target, self.new, '0.9.0', USER)
+        self.assertGreaterEqual(touch.call_count, len(self.new_program))
+
+    def test_f5_no_retry_when_the_disk_is_full(self):
+        import errno
+        calls = []
+
+        def copy(src, dst):
+            calls.append(1)
+            raise OSError(errno.ENOSPC, 'No space left on device')
+        real_apply = pu.apply
+        notes = []
+        with mock.patch.object(pu, 'apply', lambda *a, **k: real_apply(*a, copy=copy, **k)):
+            code = pu.install_and_watch(self.target, self.new, '0.9.0', USER, lambda: None,
+                                        lambda kind, detail='': notes.append(kind), retry_sleep=lambda s: None)
+        self.assertEqual((code, notes), (1, ['failed']))
+        self.assertLessEqual(len(calls), 2)  # one failing copy, not 30 attempts
+
+    def test_f5_stale_lock_takeover_is_exclusive(self):
+        pu.acquire_lock(self.target)
+        old = os.stat(self.target / pu.LOCK).st_mtime - 10_000
+        os.utime(self.target / pu.LOCK, (old, old))
+        real_open, state = os.open, {'n': 0}
+
+        def opener(path, flags, *rest):
+            state['n'] += 1
+            if state['n'] == 2:  # a competitor creates the lock right after we cleared the stale one
+                os.close(real_open(path, os.O_CREAT | os.O_WRONLY))
+                raise FileExistsError()
+            return real_open(path, flags, *rest)
+        with mock.patch('os.open', opener):
+            with self.assertRaises(pu.UpdateError):
+                pu.acquire_lock(self.target)
+        self.assertFalse(list(self.target.glob('.update.lock.stale*')))
+
+    def test_f6_case_only_rename_keeps_the_new_file(self):
+        write(self.target, {'Bin/x.dll': 'old dll'})
+        (self.target / pu.MANIFEST).write_text((self.target / pu.MANIFEST).read_text() + 'Bin/x.dll\n')
+        write(self.new, {'bin/x.dll': 'new dll'})
+        (self.new / pu.MANIFEST).write_text('\n'.join(self.new_program) + '\nbin/x.dll\n' + pu.MANIFEST + '\n')
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        got = {k.casefold(): v for k, v in tree(self.target).items()}
+        self.assertEqual(got['bin/x.dll'], b'new dll')
+
+    def test_f7_launch_failure_rolls_back_and_notifies(self):
+        calls, notes = [], []
+
+        def launch():
+            calls.append(1)
+            raise OSError('quarantined by antivirus')
+        code = pu.install_and_watch(self.target, self.new, '0.9.0', USER, launch,
+                                    lambda kind, detail='': notes.append(kind), retry_sleep=lambda s: None)
+        self.assertEqual((code, notes), (1, ['launch_failed']))
+        self.assert_old_restored()
+        self.assertFalse((self.target / pu.LOCK).exists())
+
+    def test_f8_content_cache_is_cleared(self):
+        pu.apply(self.target, self.new, '0.9.0', USER)
+        with mock.patch('filecmp.clear_cache') as clear:
+            pu.rollback(self.target)
+        self.assertTrue(clear.called)
+        with mock.patch('filecmp.clear_cache') as clear:
+            pu.apply(self.target, self.new, '0.9.0', USER)
+        self.assertTrue(clear.called)
+
+    def test_f9_not_enough_free_space_stops_before_touching_anything(self):
+        before = tree(self.target)
+        with self.assertRaises(pu.NoSpace):
+            pu.apply(self.target, self.new, '0.9.0', USER, free_space=lambda p: 10)
+        self.assertEqual(tree(self.target), before)
+        self.assertIsNone(pu.pending(self.target))
+        pu.apply(self.target, self.new, '0.9.0', USER, free_space=lambda p: 10 ** 12)
+
+
 class FakeChild:
     def __init__(self, alive=True, on_poll=None):
         self.alive, self.on_poll, self.killed = alive, on_poll, False

@@ -16,6 +16,7 @@ at any point leaves a launcher exe on disk and a journal that recover() undoes.
 The checksum parsing and the .partial download follow the idea of SpartanPort's updater
 (launcher-rust/src/core/update.rs, GPL-compatible); the rest is our own.
 """
+import errno
 import filecmp
 import hashlib
 import json
@@ -42,6 +43,22 @@ WATCH_SECONDS = 300  # how long a live but silent new launcher gets to commit
 
 class UpdateError(Exception):
     pass
+
+
+class Fatal(UpdateError):
+    """An update failure that retrying cannot fix."""
+
+
+class RestoreFailed(Fatal):
+    """The previous files could not be put back; the backup is kept untouched."""
+
+
+class NoSpace(Fatal):
+    pass
+
+
+class RuntimeChanged(Fatal):
+    """The Python runtime differs: an in-place swap could leave a launcher that cannot start."""
 
 
 def parse_checksum(text):
@@ -221,49 +238,95 @@ def _same(a, b):
         return False
 
 
-def apply(target, new_root, version, user_files, replace=os.replace, copy=shutil.copy2):
+def _launcher_last(names):
+    """Stable order with files.manifest, then the launcher exe, last."""
+    def key(n):
+        return 2 if n.casefold() == EXE.casefold() else 1 if n == MANIFEST else 0
+    return sorted(names, key=key)
+
+
+def _python_runtime(root):
+    return {p.name.casefold() for p in (Path(root) / '_internal').glob('python3*.dll')}
+
+
+def apply(target, new_root, version, user_files, replace=os.replace, copy=shutil.copy2,
+          free_space=lambda path: shutil.disk_usage(path).free):
     """Install the package in `new_root` over `target`, keeping COPIES of the replaced files in
-    backup-<version>/. Any failure puts everything back and raises UpdateError (never OSError). A
-    process death leaves the journal for recover(). On success the journal says 'installed' until commit()."""
+    backup-<version>/. Any failure puts everything back and raises UpdateError (never OSError); a
+    failure to put back raises RestoreFailed and keeps the backup. A process death leaves the journal
+    for recover(). On success the journal says 'installed' until commit()."""
     target, new_root = Path(target), Path(new_root)
     backup = target / f'{BACKUP_PREFIX}{version}'
+    filecmp.clear_cache()
+    # An update left pending (e.g. by a failed retry) is undone first; if that fails, stop: its backup
+    # is the only good copy of the previous version and must not be overwritten.
+    leftover = None
+    try:
+        leftover = pending(target)
+        if leftover:
+            rollback(target)
+    except Exception as failure:
+        raise RestoreFailed(f'a previous update could not be undone ({failure}); the previous files are '
+                            f'kept in {target / (leftover or {}).get("backup", "backup-*")}') from failure
     try:
         new = program_files(new_root, user_files)
         old = program_files(target, user_files) if (target / MANIFEST).is_file() else []
         old = old + [n for n in new if n not in old and (target / n).is_file()]  # user files at shipped paths too
         # the launcher exe goes last, right after the manifest: until then the old exe still has its files
-        last = [n for n in new if n.casefold() == EXE.casefold()]
-        manifest = [n for n in new if n == MANIFEST]
-        order = [n for n in new if n not in last and n not in manifest] + manifest + last
+        order = _launcher_last(new)
+        old_runtime, new_runtime = _python_runtime(target), _python_runtime(new_root)
+        if old_runtime and new_runtime and old_runtime != new_runtime:
+            raise RuntimeChanged('this release ships a different Python runtime; it cannot be swapped in place')
+        needed = sum((target / n).stat().st_size for n in old if (target / n).is_file())             + max([(new_root / n).stat().st_size for n in new] or [0]) + (64 << 20)
+        available = free_space(target)
+        if available < needed:
+            raise NoSpace(f'not enough free disk space ({available >> 20} MB free, {needed >> 20} MB needed)')
+    except OSError as failure:
+        raise UpdateError(f'could not read the update ({failure})') from failure
+    kept = {n.casefold() for n in order}
+    try:
         shutil.rmtree(backup, ignore_errors=True)
         journal = {'phase': 'moving', 'version': version, 'backup': backup.name, 'old': old, 'new': order,
                    'starts': 0}
         _write_journal(target, journal)
         for rel in old:
             if (target / rel).is_file():
+                touch_lock(target)
                 (backup / rel).parent.mkdir(parents=True, exist_ok=True)
                 copy(target / rel, backup / rel)
         for rel in order:
+            touch_lock(target)
             _put(copy, replace, new_root / rel, target / rel)
         for rel in old:
-            if rel not in order:
+            if rel.casefold() not in kept:  # a case-only rename is the same file, not an orphan
                 (target / rel).unlink(missing_ok=True)
-        _prune_empty(target, [n for n in old if n not in order])
+        _prune_empty(target, [n for n in old if n.casefold() not in kept])
         _write_journal(target, {**journal, 'phase': 'installed'})
     except Exception as failure:
         try:
             rollback(target)
         except Exception as second:
-            raise UpdateError(f'could not install the update ({failure}) and could not restore the previous '
-                              f'files ({second}); they are in {backup}') from failure
+            raise RestoreFailed(f'could not install the update ({failure}) and could not restore the previous '
+                                f'files ({second}); they are in {backup}') from failure
+        if isinstance(failure, OSError) and failure.errno == errno.ENOSPC:
+            raise NoSpace(f'the disk is full ({failure}); the previous version was restored '
+                          f'(backup folder: {backup})') from failure
         raise UpdateError(f'could not install the update ({failure}); the previous version was restored '
                           f'(backup folder: {backup})') from failure
 
 
-def _finish(target, journal):
-    """The commit point: the journal goes first, then the backup it pointed to."""
+def _finish(target, journal, sleep=time.sleep):
+    """The commit point: the journal goes first, then the backup it pointed to. The rename is retried
+    while something (antivirus, a watcher reading the journal) holds the file."""
     target = Path(target)
-    os.replace(target / PENDING, target / DONE)
+    for attempt in range(8):
+        try:
+            os.replace(target / PENDING, target / DONE)
+            break
+        except PermissionError:
+            if attempt == 7:
+                raise
+            sleep(0.25)
     shutil.rmtree(target / journal['backup'], ignore_errors=True)
     (target / DONE).unlink(missing_ok=True)
 
@@ -272,21 +335,23 @@ def rollback(target):
     """Undo apply(): restore the old files from the backup, drop files only the new version has,
     remove backup and journal. Raises OSError when a file is held; the journal then stays for recover()."""
     target = Path(target)
+    filecmp.clear_cache()
     journal = pending(target)
     if not journal:
         return False
     if journal['phase'] != 'rollback':
         _write_journal(target, {**journal, 'phase': 'rollback'})
     backup = target / journal['backup']
-    for rel in journal['old']:
+    for rel in _launcher_last(journal['old']):  # the launcher goes back last, as it went in last
         saved = backup / rel
         if saved.is_file() and not _same(saved, target / rel):
             _put(shutil.copy2, os.replace, saved, target / rel)
+    old_only = {n.casefold() for n in journal['old']}
     for rel in journal['new']:
-        if rel not in journal['old']:
+        if rel.casefold() not in old_only:
             (target / rel).unlink(missing_ok=True)
         (target / rel).with_name(Path(rel).name + '.upd').unlink(missing_ok=True)
-    _prune_empty(target, [n for n in journal['new'] if n not in journal['old']])
+    _prune_empty(target, [n for n in journal['new'] if n.casefold() not in old_only])
     _finish(target, journal)
     return True
 
@@ -311,14 +376,20 @@ def lock_held(target, now=time.time):
 
 def acquire_lock(target):
     path = Path(target) / LOCK
-    for _ in range(2):
+    for _ in range(3):
         try:
             os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             return
         except FileExistsError:
             if lock_held(target):
                 raise UpdateError('another update is already running')
-            path.unlink(missing_ok=True)  # left by an updater that died
+            # left by an updater that died: one rename wins the takeover, the create above stays exclusive
+            gone = path.with_name(f'{LOCK}.stale-{os.getpid()}')
+            try:
+                os.rename(path, gone)
+                gone.unlink(missing_ok=True)
+            except OSError:
+                pass
     raise UpdateError('could not take the update lock')
 
 
@@ -357,11 +428,21 @@ def recover(target):
     return bool(rollback(target))
 
 
-def commit(target):
+def commit(target, sleep=time.sleep):
     """The new version opened: drop journal then backup. Nothing pending = nothing done."""
     journal = pending(target)
     if journal and journal['phase'] == 'installed':
-        _finish(target, journal)
+        _finish(target, journal, sleep)
+
+
+def commit_quietly(target):
+    """commit() for the start-up path of a windowless app: a damaged journal or a held file must not
+    crash it. False when it failed (the next start tries again)."""
+    try:
+        commit(target)
+        return True
+    except (OSError, UpdateError):
+        return False
 
 
 def wait_for_commit(target, alive, timeout=WATCH_SECONDS, sleep=time.sleep, clock=time.monotonic):
@@ -395,13 +476,30 @@ def install_and_watch(target, new_root, old_version, user_files, launch, notify,
             try:
                 apply(target, new_root, old_version, user_files)
                 break
+            except RestoreFailed:  # never retry: the backup is the only good copy
+                notify('restore_failed', str(target))
+                return 1
+            except Fatal as error:  # no space, different runtime: retrying cannot help
+                notify('failed', str(error))
+                return 1
             except (UpdateError, OSError) as error:  # e.g. a file still in use while the old launcher closes
                 failure = error
                 retry_sleep(1)
         else:
             notify('failed', str(failure))
             return 1
-        child = launch()
+        try:
+            child = launch()
+        except Exception:  # e.g. the exe was quarantined
+            if safe_rollback(target, sleep=retry_sleep):
+                notify('launch_failed', '')
+                try:
+                    launch()
+                except Exception:
+                    pass
+            else:
+                notify('restore_failed', str(target))
+            return 1
         result = wait_for_commit(target, lambda: child.poll() is None, timeout, sleep=sleep, clock=clock)
         if result == 'committed':
             return 0
@@ -410,7 +508,10 @@ def install_and_watch(target, new_root, old_version, user_files, launch, notify,
             child.wait()
         if safe_rollback(target, sleep=retry_sleep):
             notify('restored' if result == 'exited' else 'restored_slow', '')
-            launch()
+            try:
+                launch()
+            except Exception:
+                pass
         else:
             notify('restore_failed', str(target))
         return 1

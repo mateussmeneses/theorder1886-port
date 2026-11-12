@@ -12,6 +12,12 @@ int64_t runtime_file_close(int fd) { (void)fd; return 0; }
 static int choice_next=-1;
 int theordergpu_choice_begin(const char *title, const char *const *items, const char *const *images, int count, int focus) { (void)title; (void)items; (void)images; (void)focus; return count>0; }
 int theordergpu_choice_poll(void) { return choice_next; }
+static int trophy_notified=-1;
+void theordergpu_trophy_unlocked(int id, const char *name, const char *detail, const unsigned char *png, uint64_t size) {
+    (void)name; (void)detail; (void)png; (void)size; trophy_notified=id;
+}
+const char *runtime_file_user_dir(void) { return NULL; }
+
 int runtime_savedata_param(int32_t user, const char *dir, void *param) { (void)user; (void)dir; (void)param; return -1; }
 int runtime_savedata_icon(int32_t user, const char *dir, char *out, size_t size) { (void)user; (void)dir; (void)out; (void)size; return -1; }
 
@@ -76,10 +82,33 @@ int main(void) {
     assert(playgo_todo(handle,&chunk,1)==0 && playgo_todo(handle,NULL,1)==PLAYGO_BAD_POINTER);
     assert(playgo_close(handle)==0 && playgo_close(handle)==PLAYGO_BAD_HANDLE && playgo_terminate()==0);
 
-    /* Trophies: nothing unlocked. */
+    /* Trophies (SpartanPort): unlocks are saved in <user dir>/trophies.dat and reported back; a
+     * second unlock of the same trophy is refused. No trophy00.trp here: no count, no platinum. */
+    char trophy_dir_path[512];
+    const char *tmp=getenv("TEMP") ? getenv("TEMP") : "/tmp";
+    snprintf(trophy_dir_path,sizeof(trophy_dir_path),"%s",tmp);
+#ifdef _WIN32
+    _putenv_s("THEORDER_USER_DIR",trophy_dir_path);
+#else
+    setenv("THEORDER_USER_DIR",trophy_dir_path,1);
+#endif
+    char trophy_file[600];
+    snprintf(trophy_file,sizeof(trophy_file),"%s/trophies.dat",trophy_dir_path);
+    remove(trophy_file);
     uint32_t flags[4]={~0u,~0u,~0u,~0u}, count=7;
     assert(trophy_unlock_state(1,1,flags,&count)==0 && !flags[0] && !flags[3] && count==0);
     assert(trophy_unlock_state(1,1,NULL,&count)==TROPHY_INVALID && trophy_release(0)==TROPHY_INVALID);
+    int32_t platinum=7;
+    assert(trophy_unlock(1,1,5,&platinum)==0 && platinum==-1 && trophy_notified==5);
+    trophy_notified=-1;
+    assert(trophy_unlock(1,1,5,&platinum)==TROPHY_ALREADY_UNLOCKED && trophy_notified==-1);
+    assert(trophy_unlock(1,1,40,NULL)==0 && trophy_unlock(1,1,TROPHY_MAX,NULL)==TROPHY_INVALID);
+    assert(trophy_unlock_state(1,1,flags,&count)==0 && flags[0]==(1u<<5) && flags[1]==(1u<<8));
+    FILE *saved=fopen(trophy_file,"rb");
+    uint32_t on_disk[4]={0};
+    assert(saved && fread(on_disk,sizeof(on_disk),1,saved)==1 && on_disk[0]==(1u<<5) && on_disk[1]==(1u<<8));
+    fclose(saved);
+    remove(trophy_file);
 
     float ratio=0; assert(safe_area(&ratio)==0 && ratio==1.0f && safe_area(NULL)==SYSTEM_PARAMETER);
     puts("services test: ok");

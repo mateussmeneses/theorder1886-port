@@ -116,12 +116,17 @@ Controllers (DualSense, Xbox and others) work through SDL3, together with the ke
 | F7 | mouse look on/off |
 
 On a controller without a touchpad, View (Back) is the right touchpad click.
-`THEORDER_KEY_MAP` and `THEORDER_PAD_MAP` change the buttons (`src/runtime_pad.c`).
+`THEORDER_KEY_MAP` and `THEORDER_PAD_MAP` change the buttons (`src/runtime_pad.c`), up to four sources per
+button joined by `|` (e.g. `THEORDER_KEY_MAP="cross=Space|G"`).
 
 The port's menu (Insert) holds the display, field of view, mouse, frame limit and performance
 overlay settings. The field of view (50-200%) changes live; above 100% shows more on every side.
 Its Game tab holds the master volume (0-200%), the speaker layout (automatic, stereo, 5.1, 7.1),
 Exit to Desktop, and *Pause the game*: on by default, the game stops while the menu is open.
+
+Trophies the game unlocks are kept in `<user dir>/trophies.dat` and shown in a notice with their
+icon from the game's `trophy00.trp`. Names are optional: `<user dir>/trophy_names.txt`, one
+`ID=Name | Description` per line; without it the notice says "Trophy ID n".
 
 ## Patches
 

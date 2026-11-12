@@ -100,6 +100,7 @@ inline constexpr const char* const Keys[] = {
     "Experimental. Shows a generated frame between every two real ones: twice the frames on screen, slightly more input delay. Needs the upscaler at a scaled preset; on this game build it does not run yet (issue #138), so this only adds latency.",
     "Frame generation status",
     "waiting for an upscaled frame",
+    "Trophy unlocked",
     "Show overlay",
     "The performance overlay in a corner of the screen.",
     "Advanced metrics",

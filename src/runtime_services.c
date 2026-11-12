@@ -429,18 +429,225 @@ static ABI int32_t ime_result(uint32_t *result) {
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
 
-/* ---- Trophies: accepted locally, recorded in the log ---- */
+/* ---- Trophies: unlocks are kept on disk and reported back to the game ----
+ * port (SpartanPort): the count of trophies and their icons (TROP000.PNG, TROP001.PNG...) come
+ * from the game's own sce_sys/trophy/trophy00.trp. The unlocked set is saved in
+ * <user dir>/trophies.dat. Names come from an optional <user dir>/trophy_names.txt
+ * ("ID=Name | Description" per line); without it the notice says "Trophy ID n". */
+#define TROPHY_MAX 128
+#define TROPHY_ALREADY_UNLOCKED ((int32_t)0x80551609)
+static uint32_t trophy_flags[4];
+static uint32_t trophy_total;
+static int trophy_ready;
+
+static const char *trophy_dir(void) {
+    const char *dir=getenv("THEORDER_USER_DIR");
+    if (dir && dir[0]) return dir;
+    const char *rf=runtime_file_user_dir();
+    if (rf && rf[0]) return rf;
+    return "user";
+}
+static const char *trophy_state_path(void) {
+    static char path[512];
+    snprintf(path,sizeof(path),"%s/trophies.dat",trophy_dir());
+    return path;
+}
+static uint32_t trp_be32(const unsigned char *p) { return (uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3]; }
+static void trophy_save(void) {
+    FILE *f=fopen(trophy_state_path(),"wb");
+    if (!f) { printf("Runtime: trophies: cannot write %s\n",trophy_state_path()); return; }
+    fwrite(trophy_flags,sizeof(trophy_flags),1,f); fclose(f);
+}
+/* The whole trophy00.trp stays in memory (about 3 MB): trophy_icon() hands the overlay the PNG of
+ * the trophy that was just unlocked. */
+static int trophy_ids[TROPHY_MAX]; /* ids of the icons in the TRP, ascending */
+static uint32_t trophy_id_count;
+static unsigned char *trp_data;
+static uint64_t trp_size;
+static uint32_t trp_files, trp_elem;
+
+static uint64_t trp_be64(const unsigned char *p) { return (uint64_t)trp_be32(p)<<32 | trp_be32(p+4); }
+/* The PNG of trophy `id` (TROP000.PNG, TROP001.PNG...) inside the TRP, or 0. */
+static int trophy_icon(int32_t id,const unsigned char **png,uint64_t *size) {
+    char want[16];
+    snprintf(want,sizeof(want),"TROP%03d.PNG",id);
+    for (uint32_t i=0;trp_data && i<trp_files;i++) {
+        uint64_t entry=0x60+(uint64_t)i*trp_elem;
+        if (entry+0x30>trp_size) break;
+        const unsigned char *e=trp_data+entry;
+        if (strncmp((const char *)e,want,32)) continue;
+        uint64_t off=trp_be64(e+0x20), len=trp_be64(e+0x28);
+        if (off>trp_size || len>trp_size-off || !len) return 0;
+        *png=trp_data+off; *size=len;
+        return 1;
+    }
+    return 0;
+}
+/* Texts: <user dir>/trophy_texts.txt (the launcher writes it in its language on every start) or, when
+ * there is none, <user dir>/trophy_names.txt. One "ID=Name | Description" per line (the description is
+ * optional), "@label=text" for the labels of the notice and of the trophy list, # starts a comment. */
+static char trophy_names[TROPHY_MAX][64];
+static char trophy_details[TROPHY_MAX][160];
+static FILE *trophy_open_text(char *path,size_t size) {
+    const char *dir=trophy_dir();
+    static const char *const files[1]={"trophy_names.txt"};
+    for (int i=0;i<1;i++) {
+        snprintf(path,size,"%s/%s",dir,files[i]);
+        FILE *f=fopen(path,"rb");
+        if (f) return f;
+    }
+    return 0;
+}
+static void trophy_load_names(void) {
+    char path[512];
+    FILE *f=trophy_open_text(path,sizeof(path));
+    if (!f) return;
+    char line[512];
+    unsigned loaded=0;
+    while (fgets(line,sizeof(line),f)) {
+        char *p=line;
+        if ((unsigned char)p[0]==0xEF && (unsigned char)p[1]==0xBB && (unsigned char)p[2]==0xBF) p+=3; /* UTF-8 BOM */
+        if (*p=='#') continue;
+        char *eq=strchr(p,'=');
+        if (!eq) continue;
+        char *value=eq+1;
+        size_t n=strlen(value);
+        while (n && (value[n-1]=='\n' || value[n-1]=='\r' || value[n-1]==' ')) value[--n]=0;
+        while (*value==' ') value++;
+        char *end; long id=strtol(p,&end,10);
+        if (end==p || id<0 || id>=TROPHY_MAX) continue;
+        char *detail="";
+        char *bar=strchr(value,'|');
+        if (bar) {
+            *bar=0; detail=bar+1;
+            while (*detail==' ') detail++;
+            size_t d=strlen(detail);
+            while (d && detail[d-1]==' ') detail[--d]=0;
+            size_t m=strlen(value);
+            while (m && value[m-1]==' ') value[--m]=0;
+        }
+        if (!*value) continue;
+        snprintf(trophy_names[id],sizeof(trophy_names[id]),"%s",value);
+        snprintf(trophy_details[id],sizeof(trophy_details[id]),"%s",detail);
+        loaded++;
+    }
+    fclose(f);
+    printf("Runtime: trophies: %u texts read from %s\n",loaded,path);
+}
+static void trophy_load_once(void) {
+    if (trophy_ready) return;
+    trophy_ready=1;
+    FILE *f=fopen(trophy_state_path(),"rb");
+    if (f) { if (fread(trophy_flags,sizeof(trophy_flags),1,f)!=1) memset(trophy_flags,0,sizeof(trophy_flags)); fclose(f); }
+    trophy_load_names();
+    int fd=(int)runtime_file_open("/app0/sce_sys/trophy/trophy00.trp",0,0);
+    if (fd<0) { note("trophies: trophy00.trp not found, trophy count unknown"); return; }
+    const uint64_t limit=32u<<20;
+    uint64_t cap=4u<<20, got=0;
+    unsigned char *buf=malloc(cap);
+    while (buf) {
+        if (got==cap) {
+            if (cap>=limit) break;
+            unsigned char *bigger=realloc(buf,cap*2);
+            if (!bigger) break;
+            buf=bigger; cap*=2;
+        }
+        int64_t n=(int64_t)runtime_file_read(fd,buf+got,cap-got);
+        if (n<=0) break;
+        got+=(uint64_t)n;
+    }
+    runtime_file_close(fd);
+    /* TRP header (big endian): magic DC A2 4D 00, files_count at 0x10, element_size at 0x14;
+     * the entries start at 0x60 and each is a 32-byte file name, offset (u64), size (u64). */
+    if (!buf || got<0x60 || buf[0]!=0xDC || buf[1]!=0xA2 || buf[2]!=0x4D || buf[3]!=0x00) { note("trophies: unexpected trophy00.trp header"); free(buf); return; }
+    uint32_t files=trp_be32(buf+0x10), elem=trp_be32(buf+0x14);
+    if (elem<0x30 || elem>0x100) { note("trophies: unexpected trophy00.trp entry size"); free(buf); return; }
+    trp_data=buf; trp_size=got; trp_files=files; trp_elem=elem;
+    uint32_t total=0;
+    for (uint32_t i=0;i<files;i++) {
+        uint64_t off=0x60+(uint64_t)i*elem;
+        if (off+32>got) break;
+        const char *name=(const char *)buf+off;
+        if (!strncmp(name,"TROP",4) && name[4]>='0' && name[4]<='9' && name[5]>='0' && name[5]<='9' && name[6]>='0' && name[6]<='9' && !strncmp(name+7,".PNG",5)) {
+            int id=(name[4]-'0')*100+(name[5]-'0')*10+(name[6]-'0');
+            if (id<TROPHY_MAX && total<TROPHY_MAX) trophy_ids[total++]=id;
+        }
+    }
+    trophy_total=total;
+    trophy_id_count=total;
+    printf("Runtime: trophies: %u in trophy00.trp, %u already unlocked\n",total,
+        (unsigned)(__builtin_popcount(trophy_flags[0])+__builtin_popcount(trophy_flags[1])+__builtin_popcount(trophy_flags[2])+__builtin_popcount(trophy_flags[3])));
+}
 static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
     (void)user; (void)label; (void)options;
     if (!ctx) return TROPHY_INVALID;
     *ctx=new_id(); return 0;
 }
 static ABI int32_t trophy_handle(int32_t *handle) { if (!handle) return TROPHY_INVALID; *handle=new_id(); return 0; }
-static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { (void)ctx; (void)handle; (void)options; return 0; }
+/* The notice of an unlocked trophy: its name, description and icon (lock not held). */
+static void trophy_notify(int32_t id) {
+    char notice[64], detail[sizeof(trophy_details[0])];
+    const unsigned char *png=0; uint64_t png_size=0;
+    pthread_mutex_lock(&lock);
+    if (trophy_names[id][0]) snprintf(notice,sizeof(notice),"%s",trophy_names[id]);
+    else snprintf(notice,sizeof(notice),"Trophy ID %d",id);
+    snprintf(detail,sizeof(detail),"%s",trophy_details[id]);
+    int has_icon=trophy_icon(id,&png,&png_size);
+    pthread_mutex_unlock(&lock);
+    theordergpu_trophy_unlocked(id,notice,detail,has_icon ? png : 0,has_icon ? png_size : 0);
+}
+/* On a PlayStation the system grants the platinum (id 0) with the last trophy: 1 when every other
+ * trophy of the package is unlocked and this call just unlocked the platinum. Lock held. */
+static int trophy_grant_platinum(void) {
+    int has_platinum=0;
+    if (trophy_flags[0]&1u) return 0;
+    for (uint32_t i=0;i<trophy_id_count;i++) {
+        int t=trophy_ids[i];
+        if (t==0) { has_platinum=1; continue; }
+        if (!(trophy_flags[t/32]>>(t%32)&1u)) return 0;
+    }
+    if (!has_platinum) return 0;
+    trophy_flags[0]|=1u;
+    trophy_save();
+    return 1;
+}
+/* THEORDER_TROPHY_PREVIEW=<id>: the notice of that trophy once the game registers its trophies,
+ * without unlocking anything (checks the notice, its icon and text on screen). */
+static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) {
+    (void)ctx; (void)handle; (void)options;
+    pthread_mutex_lock(&lock); trophy_load_once(); pthread_mutex_unlock(&lock);
+    static int previewed;
+    const char *preview=getenv("THEORDER_TROPHY_PREVIEW");
+    if (preview && *preview && !previewed) {
+        const long id=strtol(preview,NULL,10);
+        previewed=1;
+        if (id>=0 && id<TROPHY_MAX) trophy_notify((int32_t)id);
+    }
+    return 0;
+}
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
-    printf("Runtime: trophy %d unlocked\n",id);
     if (platinum) *platinum=-1;
+    if (id<0 || id>=TROPHY_MAX) return TROPHY_INVALID;
+    pthread_mutex_lock(&lock);
+    trophy_load_once();
+    uint32_t bit=1u<<(id%32);
+    int already=(trophy_flags[id/32]&bit)!=0;
+    int platinum_now=0;
+    if (!already) {
+        trophy_flags[id/32]|=bit;
+        trophy_save();
+        platinum_now=id!=0 && trophy_grant_platinum();
+    }
+    pthread_mutex_unlock(&lock);
+    if (already) return TROPHY_ALREADY_UNLOCKED;
+    printf("Runtime: trophy %d unlocked\n",id);
+    trophy_notify(id);
+    if (platinum_now) {
+        if (platinum) *platinum=0;
+        printf("Runtime: trophy 0 (platinum) unlocked\n");
+        trophy_notify(0);
+    }
     return 0;
 }
 static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {
@@ -452,15 +659,16 @@ static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,voi
 static ABI int32_t trophy_info(int32_t ctx,int32_t handle,int32_t id,void *details,void *data) {
     (void)id; return trophy_game_info(ctx,handle,details,data);
 }
-/* Nothing is unlocked on this console: an empty 128-trophy flag set. */
 static ABI int32_t trophy_unlock_state(int32_t ctx,int32_t handle,uint32_t *flags,uint32_t *count) {
     if (!flags || !count) return TROPHY_INVALID;
     if (ctx<=0 || handle<=0) return TROPHY_INVALID;
-    memset(flags,0,16); *count=0;
+    pthread_mutex_lock(&lock);
+    trophy_load_once();
+    memcpy(flags,trophy_flags,16); *count=trophy_total;
+    pthread_mutex_unlock(&lock);
     return 0;
 }
 static ABI int32_t trophy_release(int32_t id) { return id>0 ? 0 : TROPHY_INVALID; }
-
 /* ---- PlayGo: fully installed package ---- */
 static int playgo_handle, playgo_chunks=-1;
 static ABI int32_t playgo_init(const void *params) {

@@ -41,6 +41,18 @@ int main(int argc, char** argv) {
     const auto get_instance_proc = loader.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
     const auto get_device_proc = reinterpret_cast<PFN_vkGetDeviceProcAddr>(
         get_instance_proc(VkInstance(instance.GetInstance()), "vkGetDeviceProcAddr"));
+    // Frame generation needs storage-image reads without a format: a GPU without them reports
+    // the feature as missing in the game; here the case is skipped, not failed.
+    {
+        VkPhysicalDeviceFeatures features{};
+        reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures>(get_instance_proc(
+            VkInstance(instance.GetInstance()), "vkGetPhysicalDeviceFeatures"))(
+            VkPhysicalDevice(instance.GetPhysicalDevice()), &features);
+        if (!features.shaderStorageImageReadWithoutFormat) {
+            std::puts("SKIP: frame-generation-runtime needs shaderStorageImageReadWithoutFormat");
+            return 0;
+        }
+    }
     const auto device = instance.GetDevice();
     const auto create_view = reinterpret_cast<PFN_vkCreateImageView>(get_device_proc(device, "vkCreateImageView"));
     const auto destroy_view = reinterpret_cast<PFN_vkDestroyImageView>(get_device_proc(device, "vkDestroyImageView"));

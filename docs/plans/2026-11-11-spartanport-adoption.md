@@ -126,6 +126,12 @@ Releases bundle finished phases (v0.9.0 after phases 1-2).
   - Skipped: 368d899, b776be7, 7cdbb40, d6d1aea.
 - Phase 3: #135 (fe9e7b0, ad2784f, the audio core of 1e95c7c). 9e9cd33 does not apply (no trophy sound).
   - The menu and launcher fields for `audio_channels` and `master_volume` come with phases 4 and 7.
+- Phase 4 merged: #136 (pause while the menu is open, Game tab, Exit to Desktop; a553618 does not
+  apply), #137 (menu in pt-BR, es, fr, de, it).
+- Phase 5: frame generation (8192bbb, eb82a67, 137c8cc, 402c24c; DLSS FG removed upstream in 54cc763)
+  ported, experimental. Blocked in game by #138: the temporal upscaler never runs on CUSA00035
+  01.02 in the tested scenes, so no frame is captured. The other upscaler items (7280104, 9f501f6,
+  9bd1fec, 8d3fca2, 9fdc30c, 3ad12a7, bf9181b) wait for #138 too.
 - Pending checks:
   - reporters' retest for #99 and #63;
   - runtime-test hangs on Windows and stays out of the gate;

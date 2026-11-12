@@ -483,10 +483,11 @@ void PerformanceTab() {
         CheckRow("Deferred GPU readbacks", s.deferred_readback,
                  "Fewer waits for the GPU. Switch it off if textures or shadows look wrong.");
         // port (SpartanPort 8192bbb): a generated frame between every two real ones.
-        static const char* const fg_labels[] = {"Off", "AMD FSR 3.1 (2x)"};
+        static const char* const fg_labels[] = {"Off", "AMD FSR 3.1 (2x, experimental)"};
         ChoiceRow("Frame generation", s.frame_generation, fg_labels, nullptr, 2,
-                  "Shows a generated frame between every two real ones: twice the frames on screen, "
-                  "slightly more input delay. Works with an upscaler on (FSR, TAA or DLSS).");
+                  "Experimental. Shows a generated frame between every two real ones: twice the frames "
+                  "on screen, slightly more input delay. Needs the upscaler at a scaled preset; on this "
+                  "game build it does not run yet (issue #138), so this only adds latency.");
         if (s.startup_frame_generation != 0) {
             const char* status = s.fg_status.load();
             InfoRow("Frame generation status", status ? status : "waiting for an upscaled frame");

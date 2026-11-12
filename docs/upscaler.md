@@ -1,5 +1,15 @@
 # Temporal upscaling and frame generation — frame analysis and plan
 
+## Frame generation and the inactive upscaler (2026-11-12)
+
+AMD FSR 3.1 frame generation 2x (SpartanPort 8192bbb) captures the scene after each scaled
+upscale (`RunScaled`) and presents a generated frame before each real one. `frame_generation=fsr`
+(applied on restart) adds two swapchain images. On CUSA00035 01.02 the upscaler does not run in
+the cover tutorial or the opening (#138): the trigger compute shader 9a9cf8a9 is never
+dispatched, and with another trigger (`THEORDER_UPSCALE_BEFORE_CS=473a607b` or `92311aca`, the
+two 1920x800 passes) the scene color and camera motion are not identified. Frame generation
+therefore stays inactive and only adds latency until #138 is fixed.
+
 ## Native TAA and missing FSR 4 assets (2026-10-01)
 
 `upscaler=taa` / `THEORDER_UPSCALER=taa` is a separate native-resolution temporal AA

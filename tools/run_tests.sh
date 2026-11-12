@@ -62,7 +62,7 @@ case "$vulkan_mode" in
         fi ;;
     *) echo "Invalid THEORDER_VULKAN_TESTS=$vulkan_mode (required|auto)"; exit 2 ;;
 esac
-# Only these seven tests require a live Vulkan instance/physical device.
+# Only these tests require a live Vulkan instance/physical device.
 vulkan_device_tests=(pipeline-binary-initialization async-pipeline-cache
                      scene-resolution taa-shader camera-motion dma-barriers
                      renderpass-barrier frame-generation-runtime fg-motion-shader)

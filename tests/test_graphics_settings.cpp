@@ -211,6 +211,31 @@ int main() {
         SetEnv("THEORDER_AUDIO_VOLUME", "");
         SetEnv("THEORDER_AUDIO_CHANNELS", "");
     }
+    {
+        // Frame generation (SpartanPort 8192bbb): off / fsr (also 0 / 1), anything else off; the
+        // startup value is what the swapchain and the presenter use; the environment wins.
+        namespace S = PortSettings;
+        for (const auto& [text, want] : {std::pair{"fsr", 1}, std::pair{"1", 1}, std::pair{"off", 0},
+                                         std::pair{"0", 0}, std::pair{"FSR", 0}, std::pair{"", 0}}) {
+            {
+                std::ofstream out(path);
+                out << "frame_generation=" << text << "\n";
+            }
+            S::Load();
+            assert(v.frame_generation == want && v.startup_frame_generation == want);
+        }
+        v.frame_generation = 1;
+        S::Save();
+        assert(Read(path).find("frame_generation=fsr\n") != std::string::npos);
+        v.frame_generation = 0;
+        S::Save();
+        assert(Read(path).find("frame_generation=off\n") != std::string::npos);
+        SetEnv("THEORDER_FRAME_GENERATION", "fsr");
+        S::Load();
+        assert(v.frame_generation == 1 && v.startup_frame_generation == 1);
+        SetEnv("THEORDER_FRAME_GENERATION", "");
+        v.frame_generation = 0;
+    }
 
     {
         std::ofstream out(path);

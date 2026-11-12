@@ -34,8 +34,10 @@ language package, damaged shader cache, RAM guard, SRT walker stack fix.
 
 - SpartanPort adoption (`docs/plans/2026-11-11-spartanport-adoption.md`): phases 1 (runtime and
   memory, #125-#129) and 2 (GPU/Vulkan, #130-#131, #133-#134; window #132) merged; phase 3
-  (audio, #135) merged; phase 4 (menu): pause and Game tab in review, translations next. Then
-  upscaling/frame generation, input, launcher.
+  (audio, #135) and 4 (menu: pause, Game tab, translations, #136-#137) merged. Phase 5: frame
+  generation (FSR 3.1 2x) ported and tested on the GPU, experimental and not verified in game: the
+  temporal upscaler does not run on CUSA00035 01.02 in the tested scenes (#138). Next: #138,
+  then input, launcher.
 
 - Comparison with the other public ports (TOport, DivinusX package), scene by scene:
   `docs/plans/2026-11-11-reference-ports-review.md`. Next: flicker A/B on the same scene in

@@ -1,10 +1,9 @@
 # Temporal upscaler inputs on CUSA00035 01.02 (T-040, #138)
 
-Status: **partial, 2026-11-12.** The static part (where the current heuristics come from, and
-what the 01.02 executable says about its own frame) is done. The runtime part (pass census of a
-gameplay and a cutscene frame, camera constants from two moving frames) could not be run: the
-machine had 0.4–3.1 GB of free RAM during the session and the port's RAM guard stopped the game
-before its window opened (see "Blocked" below). Nothing here changes the renderer.
+Status: **done, 2026-11-12** (static half earlier the same day, runtime half from 25 frame
+captures of 4 scenes, sections 3–4). Diagnosis and specification only: nothing here changes the
+renderer. Section 2 was written before the runtime captures; where they disagree, section 3 wins
+(2x MSAA, not 4x; the 2D pass runs after FXAA).
 
 Address convention: eboot addresses `A` as in `docs/ENGINE_RE.md` (Ghidra VA = 0x100000000 + A).
 In `out/eboot_ghidra.exe` (sha256 `0f42dce6…146f`, built from eboot.bin sha256 `f742eb17…58d8`),
@@ -66,7 +65,7 @@ What this means for the upscaler (inferred, not yet observed):
   per-pixel screen motion of camera *and* objects, it is a better FSR motion input than the port's
   own camera reprojection plus object-motion replay. Its format, scale and sign are unknown.
 - **The game already has a temporal resolve** (`customresolve_cs` + `_temporal`, `k_prev_frame_map`).
-  The Order runs 4x MSAA with a custom resolve; the scene color the upscaler wants is the
+  The Order runs MSAA (2x on this setup, section 3) with a custom resolve; the scene color the upscaler wants is the
   *input* of that resolve's output stage, i.e. the resolved HDR image before `Full Screen Effects`.
   The upscaler should replace or follow the resolve, before motion blur, DoF, bloom and tone
   mapping; the HUD (`2D Elements`, Iggy) must stay out.
@@ -106,67 +105,227 @@ probably filled from a per-view struct by the `cgsrtdraw_ps4` / `cgrawinterface_
   rip-relative displacements and absolute 8-byte pointers to them found none either: they are
   reached indirectly (hash tables or a string table), so no function was tied to a pass name.
 
-## 3. Pass table, trigger, scene color/depth, camera constants (runtime) — NOT DONE
+## 3. Runtime: the 01.02 frame (pass table)
 
-Required by the acceptance criteria and still open:
+Build: `out/theorder-probe.exe` of 2026-11-12 02:35, branch `feat/level-start`, RTX 5060 Laptop,
+NVIDIA 621.14, output 1920x1080, defaults (upscaler setting on, but it never triggers), warm
+profile copied from `user`, n=1 run per scene. Frame captures: `FrameCapture` text dumps
+(`THEORDER_CAPTURE_TRIGGER`), re-armed in bursts by a scratch helper so that captures land 2 flips
+apart. Image numbers (`img#N`) are the texture cache's stable IDs inside one run; addresses and
+draw counts differ per scene, roles and formats do not.
 
-| Item | Status |
-|---|---|
-| Census of a gameplay frame (S2, cover tutorial) and of a cutscene frame (S3) | not run |
-| Hash and moment of the correct trigger | candidates only (`473a607b`, `92311aca`, the resolve) |
-| How to recognize scene color and depth | inferred from names only (section 2) |
-| Size, stage, slot and offsets of the camera matrices, ≥ 2 scenes | not found |
-| Two consecutive frames showing the matrix change with the camera | not captured |
-| Gameplay vs cutscene layout | not compared |
+| Run | Scene | Manifest (`out/batch/manifests/`) | Captures (flips) |
+|---|---|---|---|
+| wch | `--level wch_080_ambush --checkpoint wch_080_checkpoint_005`, `rx=255` held 64–74 s | `regression-20261112T204616Z.json` | 2814, 2816 (still); 3125/3127/3129, 3343/3345/3347 (turning) |
+| pro | prologue opening cutscene (title route `24..40 s: cross`) | `regression-20261112T205130Z.json` | 2497/2499, 2977/2979, 3457/3459 (one shot), 3936/3938 (after a cut) |
+| atr | `--level may_040_atrium --checkpoint may_040_checkpoint_010` (HUD on screen), `rx=255` 66–74 s | `regression-20261112T205323Z.json` | 3009/3011, 3334/3336/3338 |
+| cov | prologue cover tutorial (title route to 60 s) | `regression-20261112T205518Z.json` | 4063/4065, 4649/4651 (these two carry the cutscene camera of pro, near 0.01: the route timing is approximate) |
 
-### How to run it (prepared, not executed)
+Capture files: `D:\theorder-bench\cap-t040-<run>\<run id>\frame-analysis\frame_*.txt` (kept;
+cited below), screen dumps next to them (`diffs\display_*.preview.png`).
 
-The frame analyzer already dumps what is needed: every pass with targets, formats, sizes, the
-census line, shaders, sampled/written images, and the first 1 KiB of every buffer bound to the
-first four draws/dispatches of each pass (`FrameCapture::Buffer`, `vk_frame_capture.cpp`;
-`BindBuffers` calls it for ring and V# buffers of every stage whenever a capture is armed,
-independent of `gbuffer_draw`). `batch_runs.py --frame-capture-at` arms one capture; a helper
-that re-creates the trigger file as soon as the game consumes it gives near-consecutive frames
-(the session's script: `rearm.py CAPTURE_ROOT "T:N ..."`, not committed).
+Pass order of one gameplay frame (wch, flip 2814; the other 24 captures have the same structure,
+only draw counts differ). "samples" is the census field `samples c<color samples> d<depth> r<raster>`.
 
-```
-python <rearm.py> D:/theorder-bench/cap "30:1 40:1 48:1 56:1 64:3 74:3 82:1" &
-python tools/batch_runs.py --runs 1 --secs 90 --cond t040a=THEORDER_LANGUAGE=1 \
-  --pad "24:cross:0.5 28:cross:0.5 32:cross:0.5 36:cross:0.5 40:cross:0.5 50:cross:0.5 60:cross:0.5 72:rx=255:8" \
-  --scene "prologue timeline (T-040)" --issue 138 --cache-state cold \
-  --profile-root D:/theorder-bench/prof --data-root D:/theorder-bench/data \
-  --capture-dir D:/theorder-bench/cap --report-dir D:/theorder-bench/rep \
-  --frame-capture-at 9999 --frame-dump-at 30 --frame-dump-count 10 --frame-dump-spacing 6 \
-  --raw-format rgba --cusa CUSA00035 --game-version 01.02 --game-dir C:/games/CUSA00035
-```
+| Order | Role (marker it matches) | Shaders | Targets / output | Reads |
+|---|---|---|---|---|
+| 0 | previous frame to display (letterboxed copy) | VS `b9c87fc1` PS `a41511a2` | display buffer R8G8B8A8Srgb 1920x1080 | img#6 |
+| 1–3 | **Prepass**, 363 draws (334 in atr), samples `c1,2,1 d2 r2` | VS `a989f410`, … | **img#3 A2B10G10R10 1920x800, 1 sample (velocity)**; img#5 A2B10G10R10, 2 samples; img#4 R16Uint, 1 sample; **depth img#238 D32Sfloat 1920x800, 2 samples** | — |
+| 5 | **Fill Non-MSAA Depth** (full-screen) | VS `0ece32eb` PS `ba0b4687` | **img#72 D32Sfloat 1920x800, 1 sample** | img#238 |
+| 7 | depth query to 1x1 R32F | PS `f77d3cf1` | img#7 R32Sfloat 1x1 | img#238 |
+| 9 | 70 more draws into the velocity target | VS `6f6894fe` | img#3, own depth img#234 D32Sfloat 1920x800 (1 sample) | — |
+| 12–65 | shadow maps (512x512 D32), EVSM/blur CS (`8ea0ef5b` `fcddd82d` `2cc821bb` `39b36fff` `f93acac2`), light/AO tile CS at 120x50 / 60x25 (`d2bb4884` `f371a798` `c1a458ad` `b10111eb`) | | | img#238, img#4, img#72 |
+| 67–82 | **Main Pass**, 363 draws + small forward passes, samples `c2,1 d2 r2` | VS `527b7ca4` PS `cdda337e`, … | **img#17 RGBA16F 1920x800, 2 samples (HDR scene color)**; img#243 A2B10G10R10, 1 sample; depth img#238 read-only | img#14 (lighting), material textures |
+| 69–75, 84 | LowresTransparents (960x400 img#16 with depth img#73 960x400) and **Low-Res Composite** into img#17 | PS `7b95d387` (composite) | img#17 | img#16, img#73, img#234 |
+| 85 | **Resolve Pass = CS `92311aca`** (`customresolve_cs` temporal), 240x100 groups of 8x8 | | **img#21 RGBA16F 1920x800, 1 sample (resolved HDR)** | img#20 R32F 1x1 (exposure), img#3 velocity, img#17 (as `sampler2DMS`), img#74/img#76 RGBA16F 1920x800 (history) |
+| 87 | one draw into img#21 with depth img#72 | VS `35aa217d` PS `b047652a` | img#21 | |
+| 88–94 | **Velocity Tile Generation / Neighbor max / Motion Blur** | PS `c1737167` (tiles), `5ba4e1ae`, `ea102418`, `574764e2` (motion blur) | R16G16F 960x400 → 480x200 → … → 60x25; motion blur → img#22 RGBA16F 1920x800 | img#3, img#21 |
+| 95–102 | **Depth of Field** (960x400 near/far) | | img#23 RGBA16F 1920x800 | img#22, img#234 |
+| 103–105 | luminance reduction | CS `af9a3732` `e10bc8a9` `c799dd1c` | img#20/img#26 R32F 1x1 (exposure, read next frame) | img#23 |
+| 106–135 | **Bloom / Flare** | | B10G11R11 960x400, 256x256 | img#23 |
+| 136 | **Tone Mapping** | VS `0ece32eb` PS `4403da37` | img#32 R8G8B8A8Srgb 1920x800 | img#23, bloom, img#34 (lens dirt) |
+| 137 | **FXAA** (inferred from the marker order) | VS `1422b2b5` PS `2b1826e7` | img#6 A2B10G10R10 1920x800 | img#32 |
+| 138+ | **2D Elements** (HUD; atr shows the prompt here) | VS `37573b18` | img#6, depth img#72 | |
 
-(`--frame-capture-at 9999` only sets `THEORDER_CAPTURE_TRIGGER`; the helper does the arming.
-`rx=255` held 8 s turns the camera in the cover tutorial; the opening cutscene supplies camera
-motion without input.) Then, per capture file: list passes in order; find the 1920x800 HDR
-image written by a 240x100-group CS (resolve) and the first pass that reads it; in the buffers of
-the `Prepass`/main-pass first draws, look for 16-float runs with `m[3][2]==1` or `m[2][3]==1`,
-`f/(f−n)` and `−nf/(f−n)` terms and a 2.4 ratio of the x/y scales; confirm by the same
-offset changing between two captures while `rx` is held and staying fixed in still frames.
+The string order of section 2 holds, except that the 2D pass comes after FXAA, not before the
+resolve. The frame has 2x MSAA (not 4x as guessed above): every geometry pass reports 2 depth
+samples.
 
-## 4. Blocked
+Evidence for the velocity role of img#3: written by the pre-pass (one sample, like every vector
+target), read by the resolve, by the tile chain whose outputs are 2-channel R16G16F at 1/2 … 1/32
+size, and by the motion blur. The tile shader decodes it (section 4).
 
-`out/batch/manifests/regression-20261112T115948Z.json`, run `t040a`: `STOP system RAM almost
-exhausted (399 MiB free, guard 700 MiB)` before the window opened (`src/probe.c` RAM guard).
-Free physical memory over the next ~10 minutes stayed between 0.7 and 3.1 GB of 32 GB (other
-applications: IDEs, a dev web server, WSL, browsers, the REA Ghidra session). The earlier #138
-runs had ~22 GB free (`Memory: system RAM 21918 MiB free` in
-`out/batch/d138-01-20261112T044056481126Z.log`). Disabling the guard was not considered: it
-exists because Windows hangs when RAM runs out. Resume when ≥ ~12 GB is free.
+## 4. Inputs for a temporal upscaler
+
+### Trigger
+
+- **Trigger: CS `92311aca`.** It is the temporal MSAA resolve: SPIR-V from the port's cache
+  (`user/cache/CUSA00035/0x0000000092311aca_0.spv`, decompiled with `spirv-cross`) reads one
+  `sampler2DMS` (img#17), three samplers (exposure, velocity, history bilinear) and writes one
+  storage image (img#21). It runs once per frame in all 25 captures of the 4 scenes,
+  gameplay and cutscene, before every full-screen effect.
+- **`473a607b` is the non-temporal resolve** of the same pass: its SPIR-V reads only a
+  `sampler2DMS` and one sampler (no velocity, no history) and writes one image. It was not seen in
+  any of the 25 captures. In `out/batch/fgdbg-01-20261112T031347683953Z.log` (a #138 debug log that
+  printed each compute shader's first dispatch) it ran in frame 1, before the first flip, and
+  `92311aca` from frame 2 on. So `473a607b` is the resolve used when there is no history. It
+  probably also runs after camera cuts; no capture shows that.
+- `9a9cf8a9` (current `trigger_hash`) never appears: it is God of War III's.
+- Moment: run the upscaler **in place of (or right after) `92311aca`**, i.e. after the
+  Low-Res Composite into img#17 and before Motion Blur. HUD is drawn much later into img#6 and does
+  not enter the scene images. Upscaling here also upscales motion blur, DoF, bloom and tone
+  mapping, which then run at output resolution only if their targets follow (they are separate
+  1920x800 allocations).
+
+### Scene color and depth (how to recognize them)
+
+- **Scene color (pre-resolve):** the storage/sampled RGBA16F 1920x800 image that `92311aca` reads as
+  `sampler2DMS`: 2 samples, written by the main pass (2 color targets, 2-sample depth). FSR needs
+  one sample. Options for T-041: resolve it first (the game's own `473a607b` does exactly that,
+  without history), or take the resolved `92311aca` output img#21 (already temporally filtered by
+  the game, so two temporal filters in a row).
+- **Scene color (resolved):** the image `92311aca` writes (RGBA16F 1920x800, 1 sample).
+- **Depth:** the 1-sample D32Sfloat 1920x800 written by the full-screen pass right after the
+  pre-pass that samples the 2-sample pre-pass depth (img#72 here, VS `0ece32eb` PS `ba0b4687`).
+  The 2-sample depth (img#238) is the pre-pass / main pass depth. Depth is D3D 0..1, not
+  reversed (projection below).
+- Exposure: the 1x1 R32F that `92311aca` samples (written by the luminance reduction of the
+  previous frame).
+- The aspect is 2.4: every scene target is 1920x800 inside a 1920x1080 display buffer.
+
+### The game's velocity buffer
+
+- Image: A2B10G10R10 Unorm 1920x800, 1 sample, the first color target of the pre-pass (also drawn
+  by a later 70-draw pass with its own depth).
+- Encoding, from the velocity-tile shader `c1737167` (decompiled SPIR-V, gathers of R, G, A):
+  `v.x = s * R * (A_bit0 ? -1 : 1)`, `v.y = s * G * (A_bit1 ? -1 : 1)`, where `A_bit = uint(3*A)`,
+  `s` = flat user data dword 19 = **16.0** (constant in every capture), then multiplied by dword 18
+  = 0.5 for the half-size tile. That gives pixels at 1920x800, magnitude clamped to 16 px per
+  axis with 10-bit precision (16/1023 ≈ 0.016 px). B is not read by this shader. `92311aca`
+  has the same 0.5 and 16 at its user data dwords 62–63.
+- Content: per vertex from the current and previous view-projection (the pre-pass VS receives both,
+  below) and, for skinned meshes, `k_bone_cache_prev`. So camera **and** object motion, inferred
+  from the shader inputs (not checked pixel by pixel).
+- Not known: the direction (current→previous or the reverse) and the sign/axis convention relative
+  to FSR's. A pixel readback of img#3 under a known camera turn would settle it.
+- For FSR it replaces the port's camera reprojection and object-motion replay, with one limit:
+  motions above 16 px per axis are clamped (fast camera turns at 1920x800 exceed that).
+
+### Camera constants
+
+**Per-view block, 1760 bytes (V# size), in guest memory**, rebuilt each frame. Seen at
+0x104575db04 and 0x104575e1e4 (two alternating addresses). It is bound:
+
+- as V# **slot 0 of the bloom pixel shaders `c02c15fc` and `0d7b3891`** (the only V# bindings of it
+  that the capture shows, in every capture of all 4 scenes);
+- through a user-data pointer (`s2:s3` = 0x10_4575db04 / 0x10_4575e1e4) to the tile/lighting compute
+  shaders `d2bb4884`, `f371a798`, `c1a458ad`, `b10111eb`;
+- geometry vertex shaders get the two view-projections copied into their flattened user data
+  (pre-pass VS `a989f410`: dwords 60–75 current, 76–91 previous, identical to block floats 80–95 and
+  144–159).
+
+Layout (float index into the block; row-vector convention, `clip = (x y z 1) · M`; rows of 4):
+
+| Floats | Content | Check |
+|---|---|---|
+| 0–2 | camera position | equals 76–78 |
+| 4–15 | view rotation 3x4 | = transposed 48–58 rotation (by inspection) |
+| **16–31** | **projection**: [16] = x scale (negative), [21] = y scale, [26] = f/(f−n), [27] = 1, [30] = −n·f/(f−n) | [21]/[16] = −2.40000 in all 25 captures; [26], [30] match [176]/[177] to 6 digits |
+| 32–47 | inverse projection | [32] = 1/[16], [37] = 1/[21] |
+| 48–63 | view (world→camera) 4x4 | 48–63 · 16–31 = 80–95 (max error 2e-4, wch flip 3127); 48–63 · 64–79 = identity |
+| 64–79 | inverse view (camera→world) | translation 76–78 = camera position |
+| **80–95** | **view-projection, current frame** | = VS user data |
+| 96–111 | inverse view-projection, current | product with 80–95 = identity within print precision (0.03 on terms of ~300) |
+| 112–143 | projection and inverse projection again (previous frame?; equal to 16–47 in every capture, the FOV never changed between frames) | |
+| **144–159** | **view-projection, previous frame** | = VS user data 76–91 |
+| 160–175 | inverse view-projection, previous | |
+| 176, 177 | near, far | wch 0.11/700, atr 0.1/700, pro 0.01/50 and 0.1/50 |
+| 178–181 | 0.4436, 45.6, f/(f−n), −nf/(f−n) (first two not identified) | |
+
+Projection jitter: floats 24, 25 (the z-row x/y terms where a jitter would go) are 0 in all 25
+captures. The game's temporal resolve runs without a jittered projection; T-041 has to add the
+jitter itself (the port's viewport jitter).
+
+Two consecutive frames with the camera turning (wch, `rx=255` held). Each capture carries frame N
+(floats 80–95) and frame N−1 (144–159); captures are 2 flips apart:
+
+| Flip | 80, 82, 83 (current) | 144, 146, 147 (previous) | yaw from view row 0 |
+|---|---|---|---|
+| 3125 | −0.90810, −0.15354, −0.15352 | −0.91899, −0.00054, −0.00054 | 8.83° |
+| 3127 | −0.83073, −0.42768, −0.42762 | −0.87797, −0.29550, −0.29546 | 25.32° |
+| 3129 | −0.68962, −0.66108, −0.66097 | −0.76757, −0.54999, −0.54991 | 41.37° |
+
+The previous matrix of flip 3127 lies between the current ones of 3125 and 3127, the previous of
+3129 between those of 3127 and 3129 (≈ 8° per frame). With the camera still (flips 2814/2816)
+the two differ only in the 4th–5th digit (idle sway). Translation row (92–95) and the y scale
+(85 = 2.20558) are as expected for a pure yaw. The same holds in the cutscene (pro, flips
+2977/2979: 80 = 0.19403 → 0.20722, previous 0.18799 → 0.20201) and in atr.
+
+### Gameplay vs cutscene
+
+Same pass structure, same resolve `92311aca`, same velocity target, same 1760-byte block and
+layout in the cutscene (pro) as in gameplay (wch, atr, cov). Differences are values only: near/far
+(0.01/50 and 0.1/50 in the cutscene, 0.1–0.11/700 in gameplay) and FOV (y scale 3.93917 in the
+cutscene and in atr, 2.20559 in wch, 2.75699 after the cut in pro). **A detector must not test a
+fixed far plane or FOV** (the GoW3 test `data[0] == 3000` is the wrong kind of test). Robust tests
+on the block: [27] == 1, [26] == f/(f−n) and [30] == −n·f/(f−n) computed from [176]/[177],
+[21]/[16] == −(aspect) (2.4 unpatched; aspect patches change it), [76..78] == [0..2].
+
+### Spec summary for T-041
+
+1. Trigger on CS `92311aca` (temporal resolve); treat `473a607b` (resolve without history) as a
+   history reset.
+2. Color: the 2-sample RGBA16F that `92311aca` reads (resolve it), or its RGBA16F output.
+   Depth: the 1-sample D32Sfloat 1920x800 made by the "Fill Non-MSAA Depth" pass.
+   Exposure: the 1x1 R32F it samples. Output size 1920x800 (2.4:1), not 1920x1080.
+3. Motion: decode the game's A2B10G10R10 velocity (R, G magnitudes × 16 px, sign bits in A), or
+   keep the port's camera reprojection using block floats 80–95 / 144–159. The direction and
+   axis convention of the game's vectors still need one readback.
+4. Camera: the 1760-byte block found by content (above), via the V# of PS `c02c15fc`/`0d7b3891` or
+   the user-data pointer of the tile CS; it arrives after the geometry passes in command order
+   (bloom), so for the current frame it is available before the trigger only through the CS user
+   data (`d2bb4884`, before the main pass) or the VS user data.
+5. Jitter must be added by the port; the game's matrices are unjittered.
 
 ## 5. Unknown
 
-- Execution order of the passes (string order is only a hint).
-- Which of `473a607b` / `92311aca` is `customresolve_cs` (and whether `_temporal` is the active
-  variant on retail), and which pass reads its output.
-- Format, encoding and content (camera only, or camera + objects) of `k_velocity_map`, and
-  whether it is one of the three main-pass targets or a separate pass.
-- GPU constant buffer, stage, slot and offsets of view/projection; whether the matrix in the
-  buffer is the `c+0xe0` product or separate view and projection; whether cutscenes use the same
-  layout.
-- Whether the game jitters its projection for its temporal resolve (no "jitter" string exists;
-  `c+0xb4/0xb8` lens shift is the only offset seen).
+- Direction, axis convention and exact unit of the game's velocity vectors (decoded from shader
+  code, not checked against pixels); what B and the second pre-pass target img#5 (2 samples) hold;
+  img#4 (R16Uint) is probably a material/object ID.
+- Who writes the resolve's history image (img#74/img#76): no captured pass or dispatch writes it,
+  and `92311aca` has a single image store. Probably a copy outside draws/dispatches (DMA), not
+  traced.
+- Whether `473a607b` also runs on camera cuts (only the first frame was observed).
+- What the 70-draw pass into the velocity target with its own 1-sample depth (img#234) is.
+- Floats 112–143 and 178–179 of the block; the second matrix at camera object `c+0x120`.
+- Which CPU function writes the 1760-byte block (not traced in the eboot).
+- FXAA for pass 137 is inferred from the marker order only.
+- Gameplay captures are n=1 run per scene; behaviour at other output resolutions or with aspect
+  patches was not captured.
+
+## 6. Draft summary for #138 (for the maintainer to post)
+
+> **Where the temporal upscaler's inputs are on CUSA00035 01.02** (details:
+> `docs/TEMPORAL_INPUTS_01_02.md`)
+>
+> The upscaler's detection came from the God of War III port: the trigger CS `9a9cf8a9`, the
+> 5+-target G-buffer and the 864-byte camera buffer starting with far = 3000 are all God of War
+> III facts (they arrived with the initial commit). The Order's RAD engine has a different frame.
+> Frame captures of four scenes (Whitechapel and the Atrium via `--level`, the prologue cutscene
+> and cover tutorial; 25 frames, n=1 run each) show:
+>
+> - The game already has a **temporal MSAA resolve**: CS `92311aca` (one of the two 1920x800
+>   passes) reads the 2-sample RGBA16F scene color, a velocity buffer, the exposure and a history
+>   image, and writes the resolved RGBA16F 1920x800 image before motion blur, DoF, bloom and tone
+>   mapping. `473a607b` is the same resolve without history (seen on the first frame). This is
+>   the trigger for the upscaler.
+> - The game already renders **velocity**: A2B10G10R10 1920x800 from the depth pre-pass (the
+>   3-target pass), decoded by its motion-blur shaders as ±16 px per axis with the signs in alpha.
+> - **Camera**: a 1760-byte per-view block with projection, view, inverse matrices and the current
+>   and previous view-projection, near/far at floats 176/177. It was found in gameplay and in the
+>   cutscene, with the matrices following an 8°-per-frame camera turn. Near, far and FOV change per
+>   shot, so no fixed value can identify it. The game does not jitter its projection.
+> - Scene depth: the 1-sample D32 copy of the 2-sample pre-pass depth.
+>
+> Next: T-041 builds the detection on these (with a rollback switch) and checks the velocity
+> direction with a readback. Nothing has changed in the port yet.

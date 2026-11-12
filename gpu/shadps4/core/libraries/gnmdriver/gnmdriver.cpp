@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "port_overlay.h"
 #include "gnm_error.h"
 #include "gnmdriver.h"
 
@@ -2382,6 +2383,8 @@ s32 PS4_SYSV_ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
     u32 workload, u32 count, u32* dcb_gpu_addrs[], u32* dcb_sizes_in_bytes, u32* ccb_gpu_addrs[],
     u32* ccb_sizes_in_bytes, u32 vo_handle, u32 buf_idx, u32 flip_mode, s64 flip_arg) {
     LOG_DEBUG(Lib_GnmDriver, "called [buf = {}]", buf_idx);
+    // port (SpartanPort 6853390): the game stops here while the in-game menu pauses it.
+    PortOverlay::WaitWhilePaused();
 
     if (count != 0) {
         if (!dcb_gpu_addrs) {

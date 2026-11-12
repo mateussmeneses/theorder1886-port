@@ -96,6 +96,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.fps_limit = PortGraphics::ParseFpsLimit(i);
     } else if (key == "async_shaders") {
         v.async_shaders = i != 0;
+    } else if (key == "pause_game") {
+        v.pause_game = i != 0;
     } else if (key == "fsr1") {
         // FSR 1 left the launcher and the in-game menu: a value saved by an older version has no
         // control left to turn it off, so it stays off.
@@ -309,6 +311,7 @@ void Save() {
     std::fprintf(file, "fov=%d\nmouse_look=%d\nmouse_sensitivity=%d\nmouse_sensitivity_y=%d\nmouse_invert_y=%d\nanisotropy=%d\n",
                  v.fov.load(), int(v.mouse_look.load()), v.mouse_sensitivity.load(),
                  v.mouse_sensitivity_y.load(), int(v.mouse_invert_y.load()), v.anisotropy.load());
+    std::fprintf(file, "pause_game=%d\n", int(v.pause_game.load()));
     std::fprintf(file, "master_volume=%d\naudio_channels=%s\n", v.master_volume.load(),
                  AudioChannelKeys[std::clamp(v.audio_channels.load(), 0, AudioChannelsCount - 1)].data());
     // Read by run.sh at start.

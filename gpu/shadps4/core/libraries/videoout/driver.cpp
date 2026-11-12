@@ -15,6 +15,7 @@
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
+#include "port_overlay.h"
 #include "common/assert.h"
 #include "port_toggles.h"
 #include "port_settings.h"
@@ -816,6 +817,21 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             DrawLastFrame();
             timer.End();
             continue;
+        }
+        // port (SpartanPort 6853390): the game waits while the in-game menu pauses it
+        // (PortOverlay::WaitWhilePaused): its last frame is drawn again for the menu over it.
+        // A flip queued before the pause is still presented.
+        if (PortOverlay::GamePaused()) {
+            bool queued;
+            {
+                std::scoped_lock lk{mutex};
+                queued = !requests.empty();
+            }
+            if (!queued) {
+                DrawLastFrame();
+                timer.End();
+                continue;
+            }
         }
 
         // Check if it's time to take a request.

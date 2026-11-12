@@ -104,7 +104,7 @@ int main() {
         std::ofstream out(path);
         out << "show_fps=1\noverlay_fps=0\noverlay_frametime=1\noverlay_upscaler=0\noverlay_gpu=1\n"
                "overlay_cpu=1\noverlay_ram=0\noverlay_vram=1\noverlay_scale=400\noverlay_corner=2\n"
-               "overlay_opacity=-5\noverlay_layout=1\nmenu_tab=2\noverlay_advanced=1\n";
+               "overlay_opacity=-5\noverlay_layout=1\nmenu_tab=4\noverlay_advanced=1\npause_game=0\n";
     }
     #ifdef _WIN32
     _putenv_s("THEORDER_CONFIG", path);
@@ -116,7 +116,9 @@ int main() {
     PortSettings::Load();
     assert(v.overlay_items == (P::FrameTime | P::Gpu | P::Cpu | P::Vram));
     assert(v.overlay_scale == 300 && v.overlay_corner == 2 && v.overlay_opacity == 0);
-    assert(v.overlay_layout == 1 && v.menu_tab == 2); // tabs 0..MenuTabCount-1
+    assert(v.overlay_layout == 1 && v.menu_tab == 4); // tabs 0..MenuTabCount-1 (4: Game)
+    assert(!v.pause_game);
+    v.pause_game = true;
     assert(v.overlay_advanced);
     v.overlay_items = P::Fps | P::Ram;
     v.overlay_scale = 150;
@@ -126,7 +128,7 @@ int main() {
     const std::string saved = Read(path);
     for (const char* line : {"overlay_fps=1\n", "overlay_frametime=0\n", "overlay_ram=1\n", "overlay_vram=0\n",
                              "overlay_scale=150\n", "overlay_corner=2\n", "overlay_opacity=70\n",
-                             "overlay_layout=1\n", "menu_tab=1\n", "overlay_advanced=1\n"}) {
+                             "overlay_layout=1\n", "menu_tab=1\n", "overlay_advanced=1\n", "pause_game=1\n"}) {
         assert(saved.find(line) != std::string::npos);
     }
     {

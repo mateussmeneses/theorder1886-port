@@ -15,6 +15,7 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 }
 /* The menu's audio settings (theordergpu.cpp): the game's own volume and the layout that follows the device. */
 int theordergpu_audio_volume_percent(void) { return 100; }
+void theordergpu_wait_while_paused(void) {}
 int theordergpu_audio_channels(void) { return 0; }
 
 #ifdef _WIN32

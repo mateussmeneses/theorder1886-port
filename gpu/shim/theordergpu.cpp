@@ -264,6 +264,18 @@ extern "C" int theordergpu_audio_channels(void) {
     return PortSettings::Get().audio_channels.load(std::memory_order_relaxed);
 }
 
+extern "C" void theordergpu_wait_while_paused(void) {
+    PortOverlay::WaitWhilePaused();
+}
+
+extern "C" void theordergpu_exit_to_desktop(void) {
+    std::printf("Overlay: Exit to Desktop\n");
+    runtime_report();
+    theordergpu_flush_cache();
+    std::fflush(stdout);
+    std::_Exit(0);
+}
+
 extern "C" void theordergpu_flush_cache(void) {
     const char* env = std::getenv("THEORDER_CACHE_FLUSH_ON_EXIT");
     static const bool enabled = !(env && env[0] == '0');

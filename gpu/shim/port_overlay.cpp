@@ -60,6 +60,7 @@ namespace {
 std::mutex imgui_mutex; // the ImGui context: window thread (input) and present thread
 bool initialized = false;
 std::atomic<bool> menu_open{false};
+std::atomic<bool> exit_requested{false}; // Game tab > Exit to Desktop, confirmed
 bool r3_down = false, l2_down = false;
 std::atomic<bool> loading{false};
 std::atomic<u32> loading_done{0}, loading_total{0};
@@ -562,8 +563,9 @@ void GameTab() {
         if (ImGui::BeginPopupModal("Exit to Desktop?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextUnformatted("Progress since the last save is lost.");
             if (ImGui::Button("Exit")) {
-                PortSettings::Save();
-                theordergpu_exit_to_desktop();
+                // Leaves at the start of the next Render, outside imgui_mutex: the window thread
+                // keeps handling events while the shader cache drains.
+                exit_requested = true;
             }
             ImGui::SameLine();
             if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
@@ -1237,15 +1239,17 @@ bool GamePaused() {
     return PortSettings::Get().pause_game && menu_open && !loading;
 }
 
-void WaitWhilePaused() {
+void WaitWhilePaused(const char* who) {
     // The game's own thread stops here, between two frames: its clock goes on, and the game takes
     // the gap as one long frame, as after a load.
     if (!GamePaused()) {
         return;
     }
-    static std::atomic<unsigned> logged{0};
+    // One counter per caller kind (frames, sound): the first pauses of each are logged.
+    static std::atomic<unsigned> logged_frame{0}, logged_sound{0};
+    auto& logged = who && who[0] == 's' ? logged_sound : logged_frame;
     if (logged.fetch_add(1, std::memory_order_relaxed) < 4) {
-        std::printf("Overlay: game paused while the menu is open\n");
+        std::printf("Overlay: game paused while the menu is open (%s)\n", who ? who : "frame");
     }
     while (GamePaused()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1285,6 +1289,10 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
     }
     ConfirmRestart();
+    if (exit_requested) {
+        PortSettings::Save();
+        theordergpu_exit_to_desktop();
+    }
     if (!Visible()) {
         return;
     }

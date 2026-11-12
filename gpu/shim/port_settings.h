@@ -43,7 +43,7 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 5120, 1600, 3440,
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 1440, 900, 1440, 1080};
 inline constexpr int OutputCount = 8;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
-/// The in-game menu's tabs: Image, Performance, Overlay, Controls.
+/// The in-game menu's tabs: Image, Performance, Overlay, Controls, Game.
 inline constexpr int MenuTabCount = 5;
 
 struct Values {

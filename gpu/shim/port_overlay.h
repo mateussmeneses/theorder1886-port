@@ -48,7 +48,7 @@ bool CapturesInput();
 bool GamePaused();
 
 /// Game threads, where they hand in a frame or a sound buffer: waits while GamePaused().
-void WaitWhilePaused();
+void WaitWhilePaused(const char* who = "frame");
 
 /// Window thread: the game's text dialog (sceImeDialog). Shown as a box on screen until
 /// `active` is false; typing goes to the window (sdl_window), the box only displays it.

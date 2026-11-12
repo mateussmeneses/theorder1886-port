@@ -274,6 +274,26 @@ int main() {
     PortOverlay::loading = false;
     Check(PortOverlay::GamePaused());
     {
+        // A game thread really stops in WaitWhilePaused while the menu is open, and goes on once
+        // it closes (the flip and sound entry points call it).
+        std::atomic<bool> resumed{false};
+        std::thread game([&] {
+            PortOverlay::WaitWhilePaused("frame");
+            resumed = true;
+        });
+        std::this_thread::sleep_for(std::chrono::milliseconds(60));
+        Check(!resumed);
+        PortOverlay::SetOpen(false);
+        for (int i = 0; i < 200 && !resumed; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        Check(resumed);
+        game.join();
+        PortOverlay::SetOpen(true);
+        PortOverlay::requested_tab = 4;
+        MenuFrame();
+    }
+    {
         // Exit to Desktop is reachable with the arrow keys / d-pad. Enter asks the question; Escape
         // cancels it and leaves the menu open.
         const auto press = [](SDL_Keycode key) {

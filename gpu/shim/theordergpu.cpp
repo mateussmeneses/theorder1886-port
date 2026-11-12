@@ -265,10 +265,24 @@ extern "C" int theordergpu_audio_channels(void) {
 }
 
 extern "C" void theordergpu_wait_while_paused(void) {
-    PortOverlay::WaitWhilePaused();
+    PortOverlay::WaitWhilePaused("sound");
 }
 
+namespace {
+/// Exit to Desktop and closing the window both report and flush the shader cache once: the
+/// second waits for the first to end the process.
+std::atomic<bool> g_exiting{false};
+void ExitOnce() {
+    if (g_exiting.exchange(true)) {
+        for (;;) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+    }
+}
+} // namespace
+
 extern "C" void theordergpu_exit_to_desktop(void) {
+    ExitOnce();
     std::printf("Overlay: Exit to Desktop\n");
     runtime_report();
     theordergpu_flush_cache();
@@ -326,6 +340,7 @@ extern "C" int theordergpu_init(const TheOrderGpuConfig *config) {
     while (window->PollEvents()) {
       SDL_Delay(2);
     }
+    ExitOnce();
     LOG_INFO(Frontend, "Window closed by user");
     runtime_report();
     theordergpu_flush_cache();

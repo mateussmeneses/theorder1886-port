@@ -2733,14 +2733,7 @@ def latest_release():
 def release_checksum(zip_url):
     """sha256 of the release ZIP from the `<zip>.sha256` asset tools/release.sh publishes, or None
     when the release has none (404). Any other failure raises: an unreachable checksum is not 'absent'."""
-    request = urllib.request.Request(zip_url + '.sha256', headers={'User-Agent': 'theorder1886-launcher'})
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            return port_update.parse_checksum(response.read(4096).decode('utf-8', 'replace'))
-    except urllib.error.HTTPError as failure:
-        if failure.code == 404:
-            return None
-        raise
+    return port_update.fetch_checksum(zip_url)
 
 
 def install_update(target, wait_pid, old_version='previous'):
@@ -2754,30 +2747,25 @@ def install_update(target, wait_pid, old_version='previous'):
     if handle:
         kernel.WaitForSingleObject(handle, 60000)
         kernel.CloseHandle(handle)
-    for attempt in range(30):
-        try:
-            port_update.apply(target, PORT_DIR, old_version, USER_FILES, place=shutil.copy2)  # copy: this exe runs from PORT_DIR
-            break
-        except port_update.UpdateError:  # a file still in use: the old launcher is closing (nothing was changed)
-            time.sleep(1)
-    else:
-        ctypes.windll.user32.MessageBoxW(None, _(
-            'Could not install the update. Download it from the releases page.',
-            'Не удалось установить обновление. Скачайте его со страницы релизов.'), APP_NAME, 0x10)
-        open_url(RELEASES_PAGE)
-        return 1
-    child = subprocess.Popen([str(target / 'The Order 1886.exe')], cwd=str(target))
-    if not port_update.wait_for_commit(target, lambda: child.poll() is None, 90):
-        if child.poll() is None:
-            child.kill()
-            child.wait()
-        port_update.rollback(target)
-        ctypes.windll.user32.MessageBoxW(None, _(
-            'The new version did not start. The previous version was restored.',
-            'Новая версия не запустилась. Восстановлена предыдущая версия.'), APP_NAME, 0x10)
-        subprocess.Popen([str(target / 'The Order 1886.exe')], cwd=str(target))
-        return 1
-    return 0
+    def notify(kind, detail=''):
+        messages = {
+            'failed': _('Could not install the update ({}). Download it from the releases page.',
+                        'Не удалось установить обновление ({}). Скачайте его со страницы релизов.').format(detail),
+            'restored': _('The new version closed before it finished starting. The previous version was restored.',
+                          'Новая версия закрылась, не успев запуститься. Восстановлена предыдущая версия.'),
+            'restored_slow': _('The new version did not finish starting within 5 minutes. The previous version '
+                               'was restored.', 'Новая версия не запустилась за 5 минут. Восстановлена '
+                                                'предыдущая версия.'),
+            'restore_failed': _('The new version did not start and the previous version could not be restored '
+                                'automatically. The previous files are in the backup-* folder inside {}.',
+                                'Новая версия не запустилась, а предыдущую не удалось восстановить автоматически. '
+                                'Прежние файлы лежат в папке backup-* внутри {}.').format(detail)}
+        ctypes.windll.user32.MessageBoxW(None, messages[kind], APP_NAME, 0x10)
+        if kind == 'failed':
+            open_url(RELEASES_PAGE)
+    return port_update.install_and_watch(
+        target, PORT_DIR, old_version, USER_FILES, lambda: subprocess.Popen([str(target / 'The Order 1886.exe')],
+                                                                            cwd=str(target)), notify)
 
 
 def main():
@@ -2795,7 +2783,10 @@ def main():
     if WINDOWS and args[:1] == ['--install-update'] and len(args) in (3, 4):
         sys.exit(install_update(*args[1:]))
     if WINDOWS and FROZEN:
-        port_update.recover(PORT_DIR)  # an update that died halfway is undone before anything starts
+        try:  # an update that died halfway is undone before anything starts
+            port_update.recover(PORT_DIR)
+        except (OSError, port_update.UpdateError) as failure:
+            ctypes.windll.user32.MessageBoxW(None, str(failure), APP_NAME, 0x30)
     if WINDOWS and FROZEN and UPDATE_DIR not in PORT_DIR.parents:
         shutil.rmtree(UPDATE_DIR, ignore_errors=True)  # what a finished update left behind
     # Without a usable game folder there is nothing to play yet: open the launcher instead.

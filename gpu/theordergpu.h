@@ -31,6 +31,9 @@ int theordergpu_audio_channels(void);
 void theordergpu_wait_while_paused(void);
 /* The menu's Exit to Desktop: the same as closing the window (report, shader-cache flush, exit). */
 void theordergpu_exit_to_desktop(void);
+/* runtime_services.c: a trophy was just unlocked (name, description, icon PNG or null). */
+void theordergpu_trophy_unlocked(int id, const char *name, const char *detail,
+                                 const unsigned char *png, uint64_t png_size);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
 uintptr_t theordergpu_resolve(const char *scoped_nid);
 /* Called first by the loader's SIGSEGV handler: 1 when a GPU page-tracking fault was handled. */

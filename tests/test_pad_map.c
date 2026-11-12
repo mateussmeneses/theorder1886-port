@@ -155,6 +155,22 @@ int main(void) {
     assert(pressed_by(&again,SDL_SCANCODE_LCTRL)==BTN_CIRCLE);
     assert(pressed_by(&again,SDL_SCANCODE_LSHIFT)==0);
 
+    /* An alternative key per button (SpartanPort cbdbf29): every listed name presses it, an
+     * invalid one is skipped by itself, a fifth is ignored. */
+    ButtonMap alt=key_map;
+    assert(apply_button_map(&alt,"cross=Space|G, square=E|NotAKey|H",true)==2);
+    assert(pressed_by(&alt,SDL_SCANCODE_SPACE)==BTN_CROSS && pressed_by(&alt,SDL_SCANCODE_G)==BTN_CROSS);
+    assert(pressed_by(&alt,SDL_SCANCODE_E)==BTN_SQUARE && pressed_by(&alt,SDL_SCANCODE_H)==BTN_SQUARE);
+    ButtonMap all_bad=key_map;
+    assert(apply_button_map(&all_bad,"cross=Nope|Nada",true)==0);
+    assert(pressed_by(&all_bad,SDL_SCANCODE_SPACE)==BTN_CROSS);
+    ButtonMap five=key_map;
+    assert(apply_button_map(&five,"cross=M|N|O|T|U",true)==1);
+    assert(pressed_by(&five,SDL_SCANCODE_T)==BTN_CROSS && pressed_by(&five,SDL_SCANCODE_U)==0);
+    ButtonMap pads=pad_map;
+    assert(apply_button_map(&pads,"cross=a|misc1",false)==1);
+    assert(pressed_by(&pads,SDL_GAMEPAD_BUTTON_SOUTH)==BTN_CROSS && pressed_by(&pads,SDL_GAMEPAD_BUTTON_MISC1)==BTN_CROSS);
+
     /* Bad entries are skipped and leave the defaults alone. */
     ButtonMap bad=key_map;
     assert(apply_button_map(&bad,"bogus=Q,cross=NotAKey,circle,=Q,square=,,",true)==0);

@@ -102,6 +102,7 @@ inline constexpr std::pair<std::string_view, const char*> GermanText[] = {
     {"Experimental. Shows a generated frame between every two real ones: twice the frames on screen, slightly more input delay. Needs the upscaler at a scaled preset; on this game build it does not run yet (issue #138), so this only adds latency.", "Experimentell. Zeigt zwischen je zwei echten Bildern ein generiertes Bild: doppelt so viele Bilder auf dem Bildschirm, etwas mehr Eingabeverzögerung. Braucht den Upscaler mit skalierter Stufe; in dieser Spielversion läuft er noch nicht (Issue #138), daher erhöht es vorerst nur die Latenz."},
     {"Frame generation status", "Status der Bildgenerierung"},
     {"waiting for an upscaled frame", "wartet auf ein hochskaliertes Bild"},
+    {"Trophy unlocked", "Trophäe freigeschaltet"},
     {"Show overlay", "Overlay anzeigen"},
     {"The performance overlay in a corner of the screen.", "Das Leistungs-Overlay in einer Bildschirmecke."},
     {"Advanced metrics", "Erweiterte Messwerte"},

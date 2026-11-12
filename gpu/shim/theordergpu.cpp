@@ -264,6 +264,11 @@ extern "C" int theordergpu_audio_channels(void) {
     return PortSettings::Get().audio_channels.load(std::memory_order_relaxed);
 }
 
+extern "C" void theordergpu_trophy_unlocked(int id, const char* name, const char* detail,
+                                            const unsigned char* png, uint64_t png_size) {
+    PortOverlay::ShowTrophy(id, name ? name : "", detail ? detail : "", png, size_t(png_size));
+}
+
 extern "C" void theordergpu_wait_while_paused(void) {
     PortOverlay::WaitWhilePaused("sound");
 }

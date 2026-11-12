@@ -81,6 +81,20 @@ std::atomic<int> choice_result{-1}; // -1 open, -2 cancelled, else the chosen in
 // Closed lists' textures wait in choice_retired until the backend has destroyed them.
 std::vector<PortPng::Image> choice_pictures;
 std::vector<ImTextureData*> choice_textures, choice_retired;
+// port (after SpartanPort's trophy notice): unlocked trophies waiting to be shown, the one on
+// screen, its icon and when it goes. imgui_mutex.
+struct TrophyNotice {
+    std::string name, detail;
+    PortPng::Image icon;
+};
+std::vector<TrophyNotice> trophy_queue;
+TrophyNotice trophy_current;
+ImTextureData* trophy_texture = nullptr;
+std::chrono::steady_clock::time_point trophy_until{};
+std::atomic<bool> trophy_active{false};
+// Notices queued but not shown yet: Visible() reads it without imgui_mutex (presenter thread).
+std::atomic<int> trophy_pending{0};
+constexpr auto TrophyShown = std::chrono::seconds(6);
 std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
 
@@ -1051,6 +1065,63 @@ void RetireChoiceTextures() {
     choice_retiring = !choice_retired.empty();
 }
 
+// imgui_mutex held, before NewFrame: the trophy on screen goes after TrophyShown and the next
+// queued one comes with its icon as a texture (retired like the save pictures).
+void UpdateTrophyNotice() {
+    const auto now = std::chrono::steady_clock::now();
+    if (trophy_active && now >= trophy_until) {
+        if (trophy_texture) {
+            trophy_texture->WantDestroyNextFrame = true;
+            choice_retired.push_back(trophy_texture);
+            trophy_texture = nullptr;
+        }
+        trophy_active = false;
+    }
+    if (trophy_active || trophy_queue.empty()) {
+        return;
+    }
+    trophy_current = std::move(trophy_queue.front());
+    trophy_queue.erase(trophy_queue.begin());
+    trophy_pending = int(trophy_queue.size());
+    if (!trophy_current.icon.rgba.empty()) {
+        trophy_texture = IM_NEW(ImTextureData)();
+        trophy_texture->Create(ImTextureFormat_RGBA32, trophy_current.icon.width,
+                               trophy_current.icon.height);
+        std::memcpy(trophy_texture->GetPixels(), trophy_current.icon.rgba.data(),
+                    trophy_current.icon.rgba.size());
+        ImGui::RegisterUserTexture(trophy_texture);
+    }
+    trophy_until = now + TrophyShown;
+    trophy_active = true;
+}
+
+void TrophyToast() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float pad = 16.0f * base_scale;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - pad, viewport->WorkPos.y + pad),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    ImGui::Begin("##trophy", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    const float icon = 64.0f * base_scale;
+    if (trophy_texture) {
+        ImGui::Image(trophy_texture->GetTexRef(), ImVec2(icon, icon));
+        ImGui::SameLine();
+    }
+    ImGui::BeginGroup();
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", Tr("Trophy unlocked"));
+    ImGui::TextUnformatted(trophy_current.name.c_str());
+    if (!trophy_current.detail.empty()) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 360.0f * base_scale);
+        ImGui::TextDisabled("%s", trophy_current.detail.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::EndGroup();
+    ImGui::End();
+}
+
 // imgui_mutex held, before NewFrame: new pictures become textures, destroyed ones are freed.
 void UpdateChoiceTextures() {
     if (!choice_pictures.empty()) {
@@ -1308,7 +1379,7 @@ void SetLoading(bool active, u32 done, u32 total) {
 bool Visible() {
     const auto& s = PortSettings::Get();
     return initialized && (loading || background_total || menu_open || text_entry_active || choice_active ||
-                           choice_retiring || s.show_fps);
+                           choice_retiring || s.show_fps || trophy_active || trophy_pending > 0);
 }
 
 bool CapturesInput() {
@@ -1347,6 +1418,24 @@ void BeginChoice(const std::string& title, const std::vector<std::string>& items
     choice_index = focus >= 0 && focus < int(items.size()) ? focus : 0;
     choice_result = -1;
     choice_active = true;
+}
+
+void ShowTrophy(int id, const std::string& name, const std::string& detail,
+                const unsigned char* png, size_t png_size) {
+    TrophyNotice notice{name, detail, {}};
+    // Decoded on the thread that unlocked the trophy (a few ms, once per trophy).
+    if (png && png_size && !PortPng::DecodeRgba(png, png_size, notice.icon)) {
+        notice.icon = {};
+    }
+    std::printf("Overlay: trophy %d notice (%s%s)\n", id, name.c_str(),
+                notice.icon.rgba.empty() ? ", no icon" : "");
+    std::scoped_lock lock{imgui_mutex};
+    if (trophy_queue.size() < 16) {
+        trophy_queue.push_back(std::move(notice));
+        trophy_pending = int(trophy_queue.size());
+    } else {
+        std::printf("Overlay: trophy %d notice dropped (16 waiting)\n", id);
+    }
 }
 
 int PollChoice() {
@@ -1389,6 +1478,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         base_scale = scale;
     }
 
+    UpdateTrophyNotice();
     UpdateChoiceTextures();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
@@ -1409,6 +1499,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (choice_active && !menu_open) {
         ChoiceBox();
+    }
+    if (trophy_active) {
+        TrophyToast();
     }
     ImGui::Render();
 

@@ -294,15 +294,46 @@ GAME_ARGS_PATCH = 'Command Line - Game Arguments'
 def level_start(guest_args, patches):
     """The retail eboot ignores its argv (docs/ENGINE_RE.md, "Level start"): with -startlevel the
     patch that makes it read them is added to the THEORDER_PATCHES list, and -syncinterval 2, the
-    setting of the fixed option string it replaces. Other runs are unchanged."""
-    if '-startlevel' not in guest_args:
-        return guest_args, patches
+    setting of the fixed option string it replaces. Other runs are unchanged.
+
+    With the patch on, the game parses what run.py passes instead of its fixed
+    "-frontend -syncinterval 2", and stops at start on an option it does not register. So:
+    the patch chosen by name without a level gets that fixed string back, and with a level the
+    options never checked in a run (LEVEL_UNCHECKED) are left out with a note."""
     names = [name for name in (patches or '').split(';') if name]
-    if GAME_ARGS_PATCH not in names:
-        names.append(GAME_ARGS_PATCH)
+    if '-startlevel' not in guest_args:
+        if GAME_ARGS_PATCH not in names:
+            return guest_args, patches
+        if '-frontend' not in guest_args:
+            guest_args = guest_args + ['--guest-arg', '-frontend']
+    else:
+        if GAME_ARGS_PATCH not in names:
+            names.append(GAME_ARGS_PATCH)
+        guest_args = drop_guest_options(guest_args, LEVEL_UNCHECKED)
     if '-syncinterval' not in guest_args:
         guest_args = guest_args + ['--guest-arg', '-syncinterval', '--guest-arg', '2']
     return guest_args, ';'.join(names)
+
+
+# Guest options that reach the game only with the arguments patch and were not run with it yet;
+# the value is how many arguments follow the option.
+LEVEL_UNCHECKED = {'-disablecloth': 0, '-nocloth': 0, '-nocamsprings': 0, '-nocamadditive': 0,
+                   '-msaa': 1}
+
+
+def drop_guest_options(guest_args, unchecked):
+    """guest_args without the `--guest-arg OPTION [--guest-arg VALUE]` groups named in unchecked."""
+    kept, i = [], 0
+    while i < len(guest_args):
+        if guest_args[i] == '--guest-arg' and i + 1 < len(guest_args) and guest_args[i + 1] in unchecked:
+            option = guest_args[i + 1]
+            print(f'run: {option} is left out with --level (not checked with the arguments patch)',
+                  file=sys.stderr)
+            i += 2 * (1 + unchecked[option])
+        else:
+            kept.append(guest_args[i])
+            i += 1
+    return kept
 
 
 def main():

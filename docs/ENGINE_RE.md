@@ -279,6 +279,12 @@ adds the "Command Line - Game Arguments" patch and `-syncinterval 2` (`run.level
 Do not combine with `--frontend` (front end wins), with the engine's `-level` (the level loaded
 there makes the gate false), or with options the game does not register (the option checker
 stops the game; the `--perf` options `-nocamsprings`/`-nocamadditive` were never checked).
+`run.level_start` therefore leaves out `-disablecloth`, `-nocloth`, `-nocamsprings`,
+`-nocamadditive` and `-msaa` when a level is given, with a note on stderr, until each has been
+run with the patch. `run.py` always passes `-language N -enablesubtitles -usedlc`, so the string
+is never empty in practice: when the patch is chosen by name (`THEORDER_PATCHES`, the launcher)
+without a level, `level_start` adds `-frontend -syncinterval 2`, the fixed string's content.
+That path was not run; the claim that an empty string still reaches the front end is static only.
 
 Validated 2026-11-12 (`out/theorder-probe.exe` of 02:35, profile from `user/` with savedata,
 `THEORDER_PATCHES='Command Line - Game Arguments'`, `--guest-arg -syncinterval --guest-arg 2`,

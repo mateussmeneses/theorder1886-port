@@ -20,6 +20,19 @@ class RunLevelStartTests(unittest.TestCase):
         self.assertEqual(args, given)
         self.assertEqual(patches, run.GAME_ARGS_PATCH)
 
+    def test_patch_chosen_by_name_without_a_level_keeps_the_fixed_options(self):
+        args, patches = run.level_start(['--guest-arg', '-usedlc'], run.GAME_ARGS_PATCH)
+        self.assertEqual(args, ['--guest-arg', '-usedlc', '--guest-arg', '-frontend',
+                                '--guest-arg', '-syncinterval', '--guest-arg', '2'])
+        self.assertEqual(patches, run.GAME_ARGS_PATCH)
+
+    def test_unchecked_options_are_left_out_with_a_level(self):
+        given = (['--guest-arg', '-disablecloth', '--guest-arg', '-msaa', '--guest-arg', '4']
+                 + self.LEVEL + ['--guest-arg', '-nocamsprings', '--guest-arg', '-usedlc'])
+        args, _ = run.level_start(given, '')
+        self.assertEqual(args, self.LEVEL + ['--guest-arg', '-usedlc',
+                                             '--guest-arg', '-syncinterval', '--guest-arg', '2'])
+
     def test_without_a_level_nothing_changes(self):
         given = ['--guest-arg', '-disablecloth']
         self.assertEqual(run.level_start(given, ''), (given, ''))
